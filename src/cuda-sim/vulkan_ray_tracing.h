@@ -278,6 +278,7 @@ private:
 
     static void init(uint32_t launch_width, uint32_t launch_height);
 
+    static void traverse_tree(volatile uint8_t* address, bool isTopLevel = true, bool isLeaf = false, bool isRoot = true, volatile uint8_t *blas_root_addr = nullptr);
 
 public:
     static void traceRay( // called by raygen shader

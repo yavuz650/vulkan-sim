@@ -245,8 +245,10 @@ typedef struct StackEntry {
 
 
 std::ofstream print_tree;
-void traverse_tree(volatile uint8_t* address, bool isTopLevel = true, bool isLeaf = false, bool isRoot = true)
+void VulkanRayTracing::traverse_tree(volatile uint8_t* address, bool isTopLevel = true, bool isLeaf = false, bool isRoot = true, volatile uint8_t *blas_root_addr = nullptr)
 {
+    static uint64_t _topLevelAS = (uint64_t)address;
+    int64_t device_offset = (uint64_t)tlas_addr - _topLevelAS;
     if(isRoot)
     {
         GEN_RT_BVH topBVH;
@@ -256,17 +258,24 @@ void traverse_tree(volatile uint8_t* address, bool isTopLevel = true, bool isLea
 
         if (print_tree.is_open())
         {
-            print_tree << "traversing bvh , isTopLevel = " << isTopLevel << (void *)(address) << ", RootNodeOffset = (" << topBVH.RootNodeOffset << std::endl;
+            if(!isTopLevel) {
+                assert(blas_addr_map.find((void*)address) != blas_addr_map.end());
+                device_offset = (uint64_t)blas_addr_map[(void*)address] - (uint64_t)address; 
+            }
+            print_tree << "traversing bvh , isTopLevel = " << isTopLevel << "," << std::hex << (void *)(address+device_offset) << std::dec << ", RootNodeOffset = (" << topBVH.RootNodeOffset << std::endl;
         }
 
-        traverse_tree(topRootAddr, isTopLevel, false, false);
+        traverse_tree(topRootAddr, isTopLevel, false, false, address);
     }
     
     else if(!isLeaf) // internal nodes
     {
         struct GEN_RT_BVH_INTERNAL_NODE node;
         GEN_RT_BVH_INTERNAL_NODE_unpack(&node, address);
-
+        if(!isTopLevel) {
+            assert(blas_addr_map.find((void*)blas_root_addr) != blas_addr_map.end());
+            device_offset = (uint64_t)blas_addr_map[(void*)blas_root_addr] - (uint64_t)address;
+        }
         if (print_tree.is_open())
         {
             uint8_t *child_addrs[6];
@@ -274,11 +283,11 @@ void traverse_tree(volatile uint8_t* address, bool isTopLevel = true, bool isLea
             for(int i = 0; i < 5; i++)
                 child_addrs[i + 1] = child_addrs[i] + node.ChildSize[i] * 64;
             
-            print_tree << "traversing internal node " << (void *)address;
+            print_tree << "traversing internal node " << std::hex << (void *)(address+device_offset) << std::dec;
             print_tree << ", isTopLevel = " << isTopLevel << ", child offset = " << node.ChildOffset << ", node type = " << node.NodeType;
             print_tree << ", child size = (" << node.ChildSize[0] << ", " << node.ChildSize[1] << ", " << node.ChildSize[2] << ", " << node.ChildSize[3] << ", " << node.ChildSize[4] << ", " << node.ChildSize[5] << ")";
             print_tree << ", child type = (" << node.ChildType[0] << ", " << node.ChildType[1] << ", " << node.ChildType[2] << ", " << node.ChildType[3] << ", " << node.ChildType[4] << ", " << node.ChildType[5] << ")";
-            print_tree << ", child addresses = (" << (void*)(child_addrs[0]) << ", " << (void*)(child_addrs[1]) << ", " << (void*)(child_addrs[2]) << ", " << (void*)(child_addrs[3]) << ", " << (void*)(child_addrs[4]) << ", " << (void*)(child_addrs[5]) << ")";
+            print_tree << ", child addresses = (" << (void*)(child_addrs[0]+device_offset) << ", " << (void*)(child_addrs[1]+device_offset) << ", " << (void*)(child_addrs[2]+device_offset) << ", " << (void*)(child_addrs[3]+device_offset) << ", " << (void*)(child_addrs[4]+device_offset) << ", " << (void*)(child_addrs[5]+device_offset) << ")";
             print_tree << std::endl;
         }
 
@@ -313,7 +322,7 @@ void traverse_tree(volatile uint8_t* address, bool isTopLevel = true, bool isLea
 
             if (print_tree.is_open())
             {
-                print_tree << "traversing top level leaf node " << (void *)address << ", instanceID = " << instanceLeaf.InstanceID << ", BVHAddress = " << instanceLeaf.BVHAddress << ", ShaderIndex = " << instanceLeaf.ShaderIndex << std::endl;
+                print_tree << "traversing top level leaf node " << std::hex << (void *)(address+device_offset) << std::dec << ", instanceID = " << instanceLeaf.InstanceID << ", BVHAddress = " << instanceLeaf.BVHAddress << ", ShaderIndex = " << instanceLeaf.ShaderIndex << std::endl;
             }
 
             traverse_tree(address + instanceLeaf.BVHAddress, false, false, true);
@@ -340,7 +349,7 @@ void traverse_tree(volatile uint8_t* address, bool isTopLevel = true, bool isLea
 
                 if (print_tree.is_open())
                 {
-                    print_tree << "quad node " << (void*)address << " ";
+                    print_tree << "quad node " << std::hex << (void*)(address+device_offset) << std::dec << " ";
                     print_tree << "primitiveID = " << leaf.PrimitiveIndex0 << "\n";
 
                     print_tree << "p[0] = (" << p[0].x << ", " << p[0].y << ", " << p[0].z << ") ";
@@ -356,7 +365,7 @@ void traverse_tree(volatile uint8_t* address, bool isTopLevel = true, bool isLea
 
                 if (print_tree.is_open())
                 {
-                    print_tree << "PROCEDURAL node " << (void*)address << " ";
+                    print_tree << "PROCEDURAL node " << std::hex << (void*)(address+device_offset) << " " << std::dec;
                     print_tree << "NumPrimitives = " << leaf.NumPrimitives << ", LastPrimitive = " << leaf.LastPrimitive << ", PrimitiveIndex[0]" << leaf.PrimitiveIndex[0] << "\n";
                 }
             }
@@ -415,8 +424,17 @@ void VulkanRayTracing::init(uint32_t launch_width, uint32_t launch_height)
 }
 
 
-bool debugTraversal = false;
+bool debugTraversal = true;
+bool hasOpenedDebugTraversal = false;
+std::ofstream memAccesFile;
+std::string memAccessFileName;
+int accessIdx = 0;
+bool hasWritten = false;
 bool found_AS = false;
+std::map<uint64_t,uint64_t> node_parent_map;
+int node_parent_map_size = 0;
+std::ofstream node_parent_map_file;
+std::string node_parent_map_file_name;
 VkAccelerationStructureKHR topLevelAS_first = NULL;
 
 void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
@@ -502,7 +520,12 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
 
     if (debugTraversal)
     {
-        traversalFile.open("traversal.txt");
+        if(!hasOpenedDebugTraversal) {
+            traversalFile.open("traversal.txt");
+            hasOpenedDebugTraversal = true;
+        }
+        else
+            traversalFile.open("traversal.txt", std::ofstream::out | std::ofstream::app);
         traversalFile << "starting traversal\n";
         traversalFile << "origin = (" << origin.x << ", " << origin.y << ", " << origin.z << "), ";
         traversalFile << "direction = (" << direction.x << ", " << direction.y << ", " << direction.z << "), ";
@@ -544,7 +567,8 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
     GEN_RT_BVH_unpack(&topBVH, (uint8_t*)_topLevelAS);
     transactions.push_back(MemoryTransactionRecord((uint8_t*)((uint64_t)_topLevelAS + device_offset), GEN_RT_BVH_length * 4, TransactionType::BVH_STRUCTURE));
     ctx->func_sim->g_rt_mem_access_type[static_cast<int>(TransactionType::BVH_STRUCTURE)]++;
-
+    // root has no parents
+    node_parent_map[(uint64_t)_topLevelAS + device_offset] = 0;
     uint8_t* topRootAddr = (uint8_t*)_topLevelAS + topBVH.RootNodeOffset;
 
     // Get min/max
@@ -557,7 +581,7 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
                 float3 lo, hi;
                 set_child_bounds(&node, i, &lo, &hi);
                 ctx->func_sim->g_rt_world_min = min(ctx->func_sim->g_rt_world_min, lo);
-                ctx->func_sim->g_rt_world_max = min(ctx->func_sim->g_rt_world_max, hi);
+                ctx->func_sim->g_rt_world_max = max(ctx->func_sim->g_rt_world_max, hi);
             }
         }
         ctx->func_sim->g_rt_world_set = true;
@@ -578,6 +602,15 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
         float thit;
         if(ray_box_test(lo, hi, calculate_idir(ray.get_direction()), ray.get_origin(), ray.get_tmin(), ray.get_tmax(), thit))
             stack.push_back(StackEntry(topRootAddr, true, false));
+    }
+
+    for(auto t: stack) {
+        assert(t.topLevel);
+        uint8_t *addr = t.addr;
+        if(node_parent_map.find((uint64_t)addr + device_offset) != node_parent_map.end())
+            assert(node_parent_map[(uint64_t)addr + device_offset] == (uint64_t)_topLevelAS + device_offset);
+        else
+            node_parent_map[(uint64_t)addr + device_offset] = (uint64_t)_topLevelAS + device_offset;
     }
 
     while (!stack.empty())
@@ -648,6 +681,11 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
             uint8_t *child_addr = node_addr + (node.ChildOffset * 64);
             for(int i = 0; i < 6; i++)
             {
+                // if(node_parent_map.find((uint64_t)child_addr + device_offset) != node_parent_map.end())
+                //     assert(node_parent_map[(uint64_t)child_addr + device_offset] == (uint64_t)node_addr + device_offset);
+                // else
+                //     node_parent_map[(uint64_t)child_addr + device_offset] = (uint64_t)node_addr + device_offset;
+
                 if(child_hit[i])
                 {
                     if (debugTraversal)
@@ -730,6 +768,11 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
 
             transactions.push_back(MemoryTransactionRecord((uint8_t*)(botLevelRootAddr + device_offset), GEN_RT_BVH_length * 4, TransactionType::BVH_STRUCTURE));
             ctx->func_sim->g_rt_mem_access_type[static_cast<int>(TransactionType::BVH_STRUCTURE)]++;
+            
+            // if(node_parent_map.find((uint64_t)botLevelRootAddr + device_offset) != node_parent_map.end())
+            //     assert(node_parent_map[(uint64_t)botLevelRootAddr + device_offset] == (uint64_t)leaf_addr + (uint64_t)tlas_addr - (uint64_t)_topLevelAS);
+            // else
+            //     node_parent_map[(uint64_t)botLevelRootAddr + device_offset] = (uint64_t)leaf_addr + (uint64_t)tlas_addr - (uint64_t)_topLevelAS;
 
             if (debugTraversal)
             {
@@ -746,7 +789,12 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
 
             float worldToObject_tMultiplier;
             Ray objectRay = make_transformed_ray(ray, worldToObjectMatrix, &worldToObject_tMultiplier);
-            
+
+            // if(node_parent_map.find((uint64_t)leaf_addr + instanceLeaf.BVHAddress + botLevelASAddr.RootNodeOffset+device_offset) != node_parent_map.end())
+            //     assert(node_parent_map[(uint64_t)leaf_addr + instanceLeaf.BVHAddress + botLevelASAddr.RootNodeOffset+device_offset] == (uint64_t)botLevelRootAddr + device_offset);
+            // else
+            //     node_parent_map[(uint64_t)leaf_addr + instanceLeaf.BVHAddress + botLevelASAddr.RootNodeOffset+device_offset] = (uint64_t)botLevelRootAddr + device_offset;
+
             botLevelRootAddr = ((uint8_t *)((uint64_t)leaf_addr + instanceLeaf.BVHAddress)) + botLevelASAddr.RootNodeOffset;
             stack.push_back(StackEntry(botLevelRootAddr, false, false));
             assert(tree_level_map.find(leaf_addr) != tree_level_map.end());
@@ -825,6 +873,11 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
                     {
                         if(child_hit[i])
                         {
+                            // if(node_parent_map.find((uint64_t)child_addr + device_offset) != node_parent_map.end()) 
+                            //     assert(node_parent_map[(uint64_t)child_addr + device_offset] == (uint64_t)node_addr + device_offset);
+                            // else
+                            //     node_parent_map[(uint64_t)child_addr + device_offset] = (uint64_t)node_addr + device_offset;
+
                             if (debugTraversal)
                             {
                                 traversalFile << "add child node " << (void *)child_addr << ", child number " << i << ", type " << node.ChildType[i] << ", to stack" << std::endl;
@@ -1129,6 +1182,47 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
     for (auto t : transactions) {
         RT_DPRINTF("\ttransaction %d, address %p, size %d\n", t.type, t.address, t.size);
     }
+    if(!hasWritten) {
+        auto now = std::chrono::system_clock::now();
+        auto UTC = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+        memAccessFileName = "memAccessFile_"+std::to_string(UTC)+".csv";
+        std::cout << "Writing mem access to file " << memAccessFileName << std::endl;
+        memAccesFile.open(memAccessFileName, std::ofstream::out);
+        memAccesFile << "idx,tid,address,size,type,ray_orig_x,ray_orig_y,ray_orig_z,ray_dir_x,ray_dir_y,ray_dir_z\n";
+        hasWritten = true;
+    }
+    else
+        memAccesFile.open(memAccessFileName, std::ofstream::out | std::ofstream::app);
+
+    unsigned tidx = thread->get_ctaid().x * thread->get_ntid().x + thread->get_tid().x;
+    unsigned tidy = thread->get_ctaid().y * thread->get_ntid().y + thread->get_tid().y;
+    unsigned tid = tidx + tidy * thread->get_nctaid().x * thread->get_ntid().x;
+
+    for (auto t : transactions) {
+        memAccesFile << accessIdx << "," 
+                     << tid << ","
+                     << std::hex << t.address << "," << std::dec << t.size << "," 
+                     << static_cast<int>(t.type) << ","
+                     << ray.get_origin().x << "," << ray.get_origin().y << "," << ray.get_origin().z << ","
+                     << ray.get_direction().x << "," << ray.get_direction().y << "," << ray.get_direction().z << std::endl;
+    }
+    accessIdx++;
+    memAccesFile.close();
+    // if(node_parent_map_size < node_parent_map.size()) {
+    //     if(node_parent_map_size == 0) {
+    //         auto now = std::chrono::system_clock::now();
+    //         auto UTC = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+    //         node_parent_map_file_name = "node_parent_map_"+std::to_string(UTC)+".txt";
+    //         std::cout << "Writing node_parent_map to file " << node_parent_map_file_name << std::endl;
+    //     }
+    //     node_parent_map_file.open(node_parent_map_file_name, std::ofstream::out);
+
+    //     for(auto t : node_parent_map)
+    //         node_parent_map_file << std::hex << t.first << "," << t.second << "\n";
+    //     node_parent_map_file.flush();
+    //     node_parent_map_size = node_parent_map.size();
+    //     node_parent_map_file.close();
+    // }   
 }
 
 void VulkanRayTracing::endTraceRay(const ptx_instruction *pI, ptx_thread_info *thread)
@@ -1390,6 +1484,33 @@ uint32_t VulkanRayTracing::registerShaders(char * shaderPath, gl_shader_stage sh
     
     char ptxinfo_filename[400];
     snprintf(ptxinfo_filename, sizeof(ptxinfo_filename), "%sinfo", shaderPath);
+
+    // HACK: workaround for ptxinfo errors
+    std::cout << "Checking if the ptxinfo has errors in it...\n";
+    FILE *file = fopen(ptxinfo_filename, "r");
+    if (file == NULL) {
+        printf("Unable to open file %s\n", ptxinfo_filename);
+        return 1;
+    }
+    char line[1024];
+    int use_default_ptxinfo = 0;
+    // Read the file line by line
+    while (fgets(line, 1024, file) != NULL) {
+        // Check if the line contains the word "error"
+        if (strstr(line, "error") != NULL) {
+            printf("The word 'error' was found in the ptxasinfo file.\n");
+            use_default_ptxinfo = 1;
+        }
+    }
+    // Close the file
+    fclose(file);
+
+    if(use_default_ptxinfo) {
+        std::cout << "Using the default ptxinfo file...\n";
+        char *default_ptxinfo_filename = "/home/root/vulkan-sim-root/vulkan-sim/scripts/MESA_SHADER_RAYGEN_0.ptxinfo";
+        snprintf(ptxinfo_filename, sizeof(ptxinfo_filename), "%s", default_ptxinfo_filename);        
+    }
+
     ctx->gpgpu_ptx_info_load_from_external_file(ptxinfo_filename); // TODO: make a version where it just loads my ptxinfo instead of generating a new one
 
     context->register_function(fat_cubin_handle, shader.function_name, deviceFunction.c_str());
