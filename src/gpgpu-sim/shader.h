@@ -126,7 +126,8 @@ class shd_warp_t {
   }
   void init(address_type start_pc, unsigned cta_id, unsigned wid,
             const std::bitset<MAX_WARP_SIZE> &active,
-            unsigned dynamic_warp_id) {
+            unsigned dynamic_warp_id, unsigned kernel_cta_id) {
+    m_kernel_cta_id = kernel_cta_id;
     m_cta_id = cta_id;
     m_warp_id = wid;
     m_dynamic_warp_id = dynamic_warp_id;
@@ -242,6 +243,7 @@ class shd_warp_t {
   void check_time_out();
 
   unsigned get_cta_id() const { return m_cta_id; }
+  unsigned get_kernel_cta_id() const { return m_kernel_cta_id; }
 
   unsigned get_dynamic_warp_id() const { return m_dynamic_warp_id; }
   unsigned get_warp_id() const { return m_warp_id; }
@@ -251,6 +253,7 @@ class shd_warp_t {
   static const unsigned IBUFFER_SIZE = 2;
   class shader_core_ctx *m_shader;
   unsigned m_cta_id;
+  unsigned m_kernel_cta_id;
   unsigned m_warp_id;
   unsigned m_warp_size;
   unsigned m_dynamic_warp_id;
@@ -1289,6 +1292,10 @@ class rt_unit : public pipelined_simd_unit {
                 const shader_core_config *config,
                 shader_core_stats *stats,
                 unsigned sid, unsigned tpc);
+        ~rt_unit() { if(cacheAccesFile.is_open()) {
+                        cacheAccesFile.close(); 
+                      }
+                    }
                 
         virtual bool can_issue(const warp_inst_t &inst) const;
         virtual void active_lanes_in_pipeline();
@@ -1307,6 +1314,9 @@ class rt_unit : public pipelined_simd_unit {
         unsigned active_warps();
         
     protected:
+      static std::ofstream cacheAccesFile;
+      static std::string cacheAccessFileName;
+      static int cacheAccessIdx;
       void process_memory_response(mem_fetch* mf, warp_inst_t &pipe_reg);
       mem_fetch* process_memory_stores();
       mem_fetch* process_memory_chunks(warp_inst_t &inst);
@@ -2229,7 +2239,7 @@ class shader_core_ctx : public core_t {
   void get_pdom_stack_top_info(unsigned tid, unsigned *pc, unsigned *rpc) const;
   float get_current_occupancy(unsigned long long &active,
                               unsigned long long &total) const;
-
+  const std::vector<shd_warp_t *>& get_shd_warps() {return m_warp;}
   // used by pipeline timing model components:
   // modifiers
   void mem_instruction_stats(const warp_inst_t &inst);
@@ -2488,7 +2498,7 @@ class shader_core_ctx : public core_t {
                                    unsigned tid, unsigned threads_left,
                                    unsigned num_threads, core_t *core,
                                    unsigned hw_cta_id, unsigned hw_warp_id,
-                                   gpgpu_t *gpu) = 0;
+                                   gpgpu_t *gpu, unsigned kernel_cta_id) = 0;
 
   virtual void create_shd_warp() = 0;
 
@@ -2624,7 +2634,7 @@ class exec_shader_core_ctx : public shader_core_ctx {
                                    unsigned tid, unsigned threads_left,
                                    unsigned num_threads, core_t *core,
                                    unsigned hw_cta_id, unsigned hw_warp_id,
-                                   gpgpu_t *gpu);
+                                   gpgpu_t *gpu, unsigned kernel_cta_id);
   virtual void create_shd_warp();
   virtual const warp_inst_t *get_next_inst(unsigned warp_id, address_type pc);
   virtual void get_pdom_stack_top_info(unsigned warp_id, const warp_inst_t *pI,

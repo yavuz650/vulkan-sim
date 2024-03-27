@@ -561,7 +561,7 @@ void shader_core_ctx::init_warps(unsigned cta_id, unsigned start_thread,
       m_simt_tables[i]->launch(start_pc, active_threads);
     }
 
-    m_warp[i]->init(start_pc, cta_id, i, active_threads, m_dynamic_warp_id);
+    m_warp[i]->init(start_pc, cta_id, i, active_threads, m_dynamic_warp_id, ctaid);
     ++m_dynamic_warp_id;
     m_not_completed += n_active;
     ++m_active_warps;
@@ -1192,6 +1192,7 @@ void shader_core_ctx::fetch() {
             if (m_threadState[tid].m_active == true) {
               m_threadState[tid].m_active = false;
               unsigned cta_id = m_warp[warp_id]->get_cta_id();
+              printf("Completed CTA: %d at cycle: %llu\n", m_warp[warp_id]->get_kernel_cta_id(), m_gpu->gpu_sim_cycle);
               if (m_thread[tid] == NULL) {
                 register_cta_thread_exit(cta_id, m_kernel);
               } else {
@@ -1649,7 +1650,7 @@ void scheduler_unit::cycle() {
               if (m_rt_core_out->has_free(m_shader->m_config->sub_core_model, m_id)
                   && !(diff_exec_units && 
                         previous_issued_inst_exec_type == exec_unit_type_t::RT)) {
-
+                  printf("Issuing warp %d (sm0)\n",warp(warp_id).get_kernel_cta_id());
                   m_shader->issue_warp(*m_rt_core_out, pI, active_mask,
                                        warp_id, m_id);
                   issued++;
@@ -2814,6 +2815,9 @@ void pipelined_simd_unit::issue(register_set &source_reg) {
     }
 */
 
+std::ofstream rt_unit::cacheAccesFile;
+std::string rt_unit::cacheAccessFileName;
+int rt_unit::cacheAccessIdx = 0;
 rt_unit::rt_unit(mem_fetch_interface *icnt,
                      shader_core_mem_fetch_allocator *mf_allocator,
                      shader_core_ctx *core,
@@ -2895,6 +2899,7 @@ void rt_unit::cycle() {
   if (!pipe_reg.empty()) {
     n_warps++;
     RT_DPRINTF("Shader %d: A new warp has arrived! uid: %d, warp id: %d\n", m_sid, pipe_reg.get_uid(), pipe_reg.warp_id());
+    printf("SM %d Warp %d arrived cycle %llu\n", m_sid, m_core->get_shd_warps()[pipe_reg.warp_id()]->get_kernel_cta_id(), current_cycle);
     // for (unsigned i=0; i<m_config->warp_size; i++) {
     //   RT_DPRINTF("\tThread %d (%d mem): ", i, pipe_reg.mem_list_length(i));
     //   for (auto it=pipe_reg.get_thread_info(i).RT_mem_accesses.begin(); it!=pipe_reg.get_thread_info(i).RT_mem_accesses.end(); it++) {
@@ -3089,6 +3094,7 @@ void rt_unit::cycle() {
     // A completed warp has no more memory accesses and all the intersection delays are complete and has no pending writes
     if (it->second.rt_mem_accesses_empty() && it->second.rt_intersection_delay_done() && !it->second.has_pending_writes()) {
       RT_DPRINTF("Shader %d: Warp %d (uid: %d) completed!\n", m_sid, it->second.warp_id(), it->first);
+      printf("SM %d Warp %d completed cycle %llu\n",m_sid, m_core->get_shd_warps()[it->second.warp_id()]->get_kernel_cta_id(), current_cycle);
       if (m_operand_collector->writeback(it->second)) {
         m_scoreboard->releaseRegisters(&it->second);
         m_core->warp_inst_complete(it->second);
@@ -3495,7 +3501,22 @@ void rt_unit::process_cache_access(baseline_cache *cache, warp_inst_t &inst, mem
     
   else {
     RT_DPRINTF("Shader %d: Sending cache request for 0x%x\n", m_sid, mf->get_uncoalesced_addr());
-    
+    if(!cacheAccesFile.is_open()) {
+        std::time_t raw_time = std::time(0);
+        struct tm *time_info;
+        char time_buf[30];
+        time_info = localtime(&raw_time);
+        strftime(time_buf, sizeof(time_buf), "%d-%m-%Y-%H-%M-%S", time_info);
+        std::string time_offset(time_buf);
+        cacheAccessFileName = "cacheAccessFile_"+time_offset+".csv";
+        std::cout << "Writing cache access to file " << cacheAccessFileName << std::endl;
+        cacheAccesFile.open(cacheAccessFileName,std::ofstream::out);
+        cacheAccesFile << "idx,smid,kernel_ctaid,dynamic_warpid,address,cycle\n";
+    }
+    cacheAccesFile << cacheAccessIdx << "," << m_sid << "," << m_core->get_shd_warps()[inst.get_warp_id()]->get_kernel_cta_id() << "," << inst.dynamic_warp_id() << "," << std::hex << mf->get_addr() << "," << std::dec 
+                   << m_core->get_gpu()->gpu_sim_cycle + m_core->get_gpu()->gpu_tot_sim_cycle << "\n";
+    cacheAccessIdx++;
+
     m_stats->rt_mem_requests++;
 
     // Access cache
