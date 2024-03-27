@@ -55,6 +55,7 @@ unsigned ptx_sim_init_thread(kernel_info_t &kernel,
                              unsigned num_threads, class core_t *core,
                              unsigned hw_cta_id, unsigned hw_warp_id,
                              gpgpu_t *gpu,
+                             unsigned kernel_cta_id = 0,
                              bool functionalSimulationMode = false);
 const struct gpgpu_ptx_sim_info *ptx_sim_kernel_info(
     const class function_info *kernel);

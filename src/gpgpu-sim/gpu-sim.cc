@@ -77,7 +77,38 @@ class gpgpu_sim_wrapper {};
 #include <iostream>
 #include <sstream>
 #include <string>
-
+std::vector<std::vector<int>> static_cta_schedule = {
+  {0, 4, 8, 12, 16, 20, 24, 28,226, 230, 234, 238, 242, 246, 250, 254,480, 484, 488, 492, 496, 500, 504, 508,928, 932, 936, 940, 944, 948, 952, 956,899, 903, 907, 911, 915, 919, 923, 927},
+  {1, 5, 9, 13, 17, 21, 25, 29,227, 231, 235, 239, 243, 247, 251, 255,481, 485, 489, 493, 497, 501, 505, 509,960, 964, 968, 972, 976, 980, 984, 988,929, 933, 937, 941, 945, 949, 953, 957},
+  {2, 6, 10, 14, 18, 22, 26, 30,256, 260, 264, 268, 272, 276, 280, 284,482, 486, 490, 494, 498, 502, 506, 510,992, 996, 1000, 1004, 1008, 1012, 1016, 1020,930, 934, 938, 942, 946, 950, 954, 958},
+  {3, 7, 11, 15, 19, 23, 27, 31,257, 261, 265, 269, 273, 277, 281, 285,483, 487, 491, 495, 499, 503, 507, 511,994, 998, 1002, 1006, 1010, 1014, 1018, 1022,931, 935, 939, 943, 947, 951, 955, 959},
+  {32, 36, 40, 44, 48, 52, 56, 60,258, 262, 266, 270, 274, 278, 282, 286,512, 516, 520, 524, 528, 532, 536, 540,995, 999, 1003, 1007, 1011, 1015, 1019, 1023,961, 965, 969, 973, 977, 981, 985, 989},
+  {33, 37, 41, 45, 49, 53, 57, 61,259, 263, 267, 271, 275, 279, 283, 287,513, 517, 521, 525, 529, 533, 537, 541,578, 582, 586, 590, 594, 598, 602, 606,962, 966, 970, 974, 978, 982, 986, 990},
+  {34, 38, 42, 46, 50, 54, 58, 62,288, 292, 296, 300, 304, 308, 312, 316,514, 518, 522, 526, 530, 534, 538, 542,610, 614, 618, 622, 626, 630, 634, 638,963, 967, 971, 975, 979, 983, 987, 991},
+  {35, 39, 43, 47, 51, 55, 59, 63,289, 293, 297, 301, 305, 309, 313, 317,515, 519, 523, 527, 531, 535, 539, 543,642, 646, 650, 654, 658, 662, 666, 670,993, 997, 1001, 1005, 1009, 1013, 1017, 1021},
+  {64, 68, 72, 76, 80, 84, 88, 92,290, 294, 298, 302, 306, 310, 314, 318,544, 548, 552, 556, 560, 564, 568, 572,673, 677, 681, 685, 689, 693, 697, 701},
+  {65, 69, 73, 77, 81, 85, 89, 93,291, 295, 299, 303, 307, 311, 315, 319,545, 549, 553, 557, 561, 565, 569, 573,674, 678, 682, 686, 690, 694, 698, 702},
+  {66, 70, 74, 78, 82, 86, 90, 94,320, 324, 328, 332, 336, 340, 344, 348,546, 550, 554, 558, 562, 566, 570, 574,705, 709, 713, 717, 721, 725, 729, 733},
+  {67, 71, 75, 79, 83, 87, 91, 95,321, 325, 329, 333, 337, 341, 345, 349,547, 551, 555, 559, 563, 567, 571, 575,706, 710, 714, 718, 722, 726, 730, 734},
+  {96, 100, 104, 108, 112, 116, 120, 124,322, 326, 330, 334, 338, 342, 346, 350,576, 580, 584, 588, 592, 596, 600, 604,707, 711, 715, 719, 723, 727, 731, 735},
+  {97, 101, 105, 109, 113, 117, 121, 125,323, 327, 331, 335, 339, 343, 347, 351,577, 581, 585, 589, 593, 597, 601, 605,737, 741, 745, 749, 753, 757, 761, 765},
+  {98, 102, 106, 110, 114, 118, 122, 126,352, 356, 360, 364, 368, 372, 376, 380,579, 583, 587, 591, 595, 599, 603, 607,738, 742, 746, 750, 754, 758, 762, 766},
+  {99, 103, 107, 111, 115, 119, 123, 127,353, 357, 361, 365, 369, 373, 377, 381,608, 612, 616, 620, 624, 628, 632, 636,739, 743, 747, 751, 755, 759, 763, 767},
+  {128, 132, 136, 140, 144, 148, 152, 156,354, 358, 362, 366, 370, 374, 378, 382,609, 613, 617, 621, 625, 629, 633, 637,769, 773, 777, 781, 785, 789, 793, 797},
+  {129, 133, 137, 141, 145, 149, 153, 157,355, 359, 363, 367, 371, 375, 379, 383,611, 615, 619, 623, 627, 631, 635, 639,770, 774, 778, 782, 786, 790, 794, 798},
+  {130, 134, 138, 142, 146, 150, 154, 158,384, 388, 392, 396, 400, 404, 408, 412,640, 644, 648, 652, 656, 660, 664, 668,771, 775, 779, 783, 787, 791, 795, 799},
+  {131, 135, 139, 143, 147, 151, 155, 159,385, 389, 393, 397, 401, 405, 409, 413,641, 645, 649, 653, 657, 661, 665, 669,801, 805, 809, 813, 817, 821, 825, 829},
+  {160, 164, 168, 172, 176, 180, 184, 188,386, 390, 394, 398, 402, 406, 410, 414,643, 647, 651, 655, 659, 663, 667, 671,802, 806, 810, 814, 818, 822, 826, 830},
+  {161, 165, 169, 173, 177, 181, 185, 189,387, 391, 395, 399, 403, 407, 411, 415,672, 676, 680, 684, 688, 692, 696, 700,803, 807, 811, 815, 819, 823, 827, 831},
+  {162, 166, 170, 174, 178, 182, 186, 190,416, 420, 424, 428, 432, 436, 440, 444,675, 679, 683, 687, 691, 695, 699, 703,833, 837, 841, 845, 849, 853, 857, 861},
+  {163, 167, 171, 175, 179, 183, 187, 191,417, 421, 425, 429, 433, 437, 441, 445,704, 708, 712, 716, 720, 724, 728, 732,834, 838, 842, 846, 850, 854, 858, 862},
+  {192, 196, 200, 204, 208, 212, 216, 220,418, 422, 426, 430, 434, 438, 442, 446,736, 740, 744, 748, 752, 756, 760, 764,835, 839, 843, 847, 851, 855, 859, 863},
+  {193, 197, 201, 205, 209, 213, 217, 221,419, 423, 427, 431, 435, 439, 443, 447,768, 772, 776, 780, 784, 788, 792, 796,865, 869, 873, 877, 881, 885, 889, 893},
+  {194, 198, 202, 206, 210, 214, 218, 222,448, 452, 456, 460, 464, 468, 472, 476,800, 804, 808, 812, 816, 820, 824, 828,866, 870, 874, 878, 882, 886, 890, 894},
+  {195, 199, 203, 207, 211, 215, 219, 223,449, 453, 457, 461, 465, 469, 473, 477,832, 836, 840, 844, 848, 852, 856, 860,867, 871, 875, 879, 883, 887, 891, 895},
+  {224, 228, 232, 236, 240, 244, 248, 252,450, 454, 458, 462, 466, 470, 474, 478,864, 868, 872, 876, 880, 884, 888, 892,897, 901, 905, 909, 913, 917, 921, 925},
+  {225, 229, 233, 237, 241, 245, 249, 253,451, 455, 459, 463, 467, 471, 475, 479,896, 900, 904, 908, 912, 916, 920, 924,898, 902, 906, 910, 914, 918, 922, 926}
+};
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 
 bool g_interactive_debugger_enabled = false;
@@ -1618,7 +1649,9 @@ bool shader_core_ctx::can_issue_1block(kernel_info_t &kernel) {
 
     return occupy_shader_resource_1block(kernel, false);
   } else {
-    return (get_n_active_cta() < m_config->max_cta(kernel));
+    //return (get_n_active_cta() < m_config->max_cta(kernel)) && (static_cta_schedule[m_sid].size() > 0 || static_cta_schedule[30].size() > 0 || static_cta_schedule[31].size() > 0);
+    return (get_n_active_cta() < m_config->max_cta(kernel)) && (static_cta_schedule[m_sid].size() > 0);
+    //return (get_n_active_cta() < m_config->max_cta(kernel));
   }
 }
 
@@ -1730,9 +1763,9 @@ void shader_core_ctx::release_shader_resource_1block(unsigned hw_ctaid,
 unsigned exec_shader_core_ctx::sim_init_thread(
     kernel_info_t &kernel, ptx_thread_info **thread_info, int sid, unsigned tid,
     unsigned threads_left, unsigned num_threads, core_t *core,
-    unsigned hw_cta_id, unsigned hw_warp_id, gpgpu_t *gpu) {
+    unsigned hw_cta_id, unsigned hw_warp_id, gpgpu_t *gpu, unsigned kernel_cta_id) {
   return ptx_sim_init_thread(kernel, thread_info, sid, tid, threads_left,
-                             num_threads, core, hw_cta_id, hw_warp_id, gpu);
+                             num_threads, core, hw_cta_id, hw_warp_id, gpu, kernel_cta_id);
 }
 
 void shader_core_ctx::issue_block2core(kernel_info_t &kernel) {
@@ -1795,7 +1828,21 @@ void shader_core_ctx::issue_block2core(kernel_info_t &kernel) {
   unsigned nthreads_in_block = 0;
   function_info *kernel_func_info = kernel.entry();
   symbol_table *symtab = kernel_func_info->get_symtab();
-  unsigned ctaid = kernel.get_next_cta_id_single();
+  //unsigned ctaid = kernel.get_next_cta_id_single();
+  unsigned ctaid;
+  if(static_cta_schedule[m_sid].size() > 0) {
+    ctaid = static_cta_schedule[m_sid][0];
+    static_cta_schedule[m_sid].erase(static_cta_schedule[m_sid].begin());
+  }
+  // else if(static_cta_schedule[30].size() > 0) {
+  //   ctaid = static_cta_schedule[30][0];
+  //   static_cta_schedule[30].erase(static_cta_schedule[30].begin());
+  // }
+  // else {
+  //   assert(static_cta_schedule[31].size() > 0);
+  //   ctaid = static_cta_schedule[31][0];
+  //   static_cta_schedule[31].erase(static_cta_schedule[31].begin());
+  // }
   checkpoint *g_checkpoint = new checkpoint();
   for (unsigned i = start_thread; i < end_thread; i++) {
     m_threadState[i].m_cta_id = free_cta_hw_id;
@@ -1803,7 +1850,7 @@ void shader_core_ctx::issue_block2core(kernel_info_t &kernel) {
     nthreads_in_block += sim_init_thread(
         kernel, &m_thread[i], m_sid, i, cta_size - (i - start_thread),
         m_config->n_thread_per_shader, this, free_cta_hw_id, warp_id,
-        m_cluster->get_gpu());
+        m_cluster->get_gpu(),ctaid);
     m_threadState[i].m_active = true;
     // load thread local memory and register file
     if (m_gpu->resume_option == 1 && kernel.get_uid() == m_gpu->resume_kernel &&
@@ -1840,7 +1887,7 @@ void shader_core_ctx::issue_block2core(kernel_info_t &kernel) {
   // initialize the SIMT stacks and fetch hardware
   init_warps(free_cta_hw_id, start_thread, end_thread, ctaid, cta_size, kernel);
   m_n_active_cta++;
-
+  printf("Issued cta %d to sm %d at cycle: %llu\n", ctaid, m_sid, m_gpu->gpu_sim_cycle);
   shader_CTA_count_log(m_sid, 1);
   SHADER_DPRINTF(LIVENESS,
                  "GPGPU-Sim uArch: cta:%2u, start_tid:%4u, end_tid:%4u, "

@@ -2208,7 +2208,7 @@ unsigned ptx_sim_init_thread(kernel_info_t &kernel,
                              unsigned tid, unsigned threads_left,
                              unsigned num_threads, core_t *core,
                              unsigned hw_cta_id, unsigned hw_warp_id,
-                             gpgpu_t *gpu, bool isInFunctionalSimulationMode) {
+                             gpgpu_t *gpu, unsigned kernel_cta_id, bool isInFunctionalSimulationMode) {
   std::list<ptx_thread_info *> &active_threads = kernel.active_threads();
 
   static std::map<unsigned, memory_space *> shared_memory_lookup;
@@ -2299,7 +2299,8 @@ unsigned ptx_sim_init_thread(kernel_info_t &kernel,
   std::map<unsigned, memory_space *> &local_mem_lookup =
       local_memory_lookup[sid];
   while (kernel.more_threads_in_cta()) {
-    dim3 ctaid3d = kernel.get_next_cta_id();
+    //dim3 ctaid3d = kernel.get_next_cta_id();
+    dim3 ctaid3d = dim3(kernel_cta_id%8,kernel_cta_id/8,0);
     unsigned new_tid = kernel.get_next_thread_id();
     dim3 tid3d = kernel.get_next_thread_id_3d();
     kernel.increment_thread_id();
