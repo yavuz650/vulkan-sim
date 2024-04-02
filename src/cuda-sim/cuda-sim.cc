@@ -2299,8 +2299,11 @@ unsigned ptx_sim_init_thread(kernel_info_t &kernel,
   std::map<unsigned, memory_space *> &local_mem_lookup =
       local_memory_lookup[sid];
   while (kernel.more_threads_in_cta()) {
-    //dim3 ctaid3d = kernel.get_next_cta_id();
-    dim3 ctaid3d = dim3(kernel_cta_id%8,kernel_cta_id/8,0);
+    dim3 ctaid3d;
+    if(!gpu->gpgpu_ctx->device_runtime->g_custom_cta_scheduling)
+      ctaid3d = kernel.get_next_cta_id();
+    else
+      ctaid3d = dim3(kernel_cta_id%kernel.get_grid_dim().x,kernel_cta_id/kernel.get_grid_dim().x,0);
     unsigned new_tid = kernel.get_next_thread_id();
     dim3 tid3d = kernel.get_next_thread_id_3d();
     kernel.increment_thread_id();

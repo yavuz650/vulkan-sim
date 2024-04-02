@@ -61,8 +61,6 @@
 #define CREATELOG 111
 #define SAMPLELOG 222
 #define DUMPLOG 333
-extern std::vector<std::vector<int>> static_cta_schedule;
-extern std::vector<int> cta_group_idx;
 class gpgpu_context;
 
 extern tr1_hash_map<new_addr_type, unsigned> address_random_interleaving;

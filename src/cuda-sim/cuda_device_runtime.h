@@ -47,6 +47,8 @@ class cuda_device_runtime {
   unsigned long long g_max_total_param_size;
   bool g_cdp_enabled;
   int g_max_sim_rt_kernels;
+  bool g_custom_cta_scheduling;
+  int g_cta_group_size;
 
   // backward pointer
   class gpgpu_context* gpgpu_ctx;

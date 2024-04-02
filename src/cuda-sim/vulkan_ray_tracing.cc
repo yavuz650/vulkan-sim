@@ -1568,6 +1568,7 @@ void VulkanRayTracing::vkCmdTraceRaysKHR(
                       uint32_t launch_depth,
                       uint64_t launch_size_addr) {
     printf("gpgpusim: launching cmd trace ray\n");
+    printf("yavuz's vulkan-sim repo\n");
     // launch_width = 224;
     // launch_height = 160;
     init(launch_width, launch_height);
