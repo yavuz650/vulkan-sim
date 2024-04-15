@@ -3435,6 +3435,10 @@ void gpgpu_sim_config::reg_options(option_parser_t opp) {
                          &(gpgpu_ctx->device_runtime->g_cta_group_size),
                          "CTA group size for custom CTA scheduling. Default: 4",
                          "4");
+  option_parser_register(opp, "-interleaved_thread_to_pixel", OPT_BOOL,
+                         &(gpgpu_ctx->device_runtime->g_interleaved_thread_to_pixel),
+                         "Enable(1) or disable(0) CTA scheduling for ray tracing study. Interleaved thread-to-pixel mapping in stereo. Default: 0",
+                         "0");
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -3591,7 +3595,7 @@ void exec_gpgpu_sim::createSIMTCluster() {
   next_cta_group_idx = m_shader_config->n_simt_clusters;
   for (int i = 0; i < m_shader_config->n_simt_clusters; i++)
     cta_group_idx.push_back(i);
-  static_cta_schedule = cta_groups4_interleaved1;//gpgpu_ctx->device_runtime->g_cta_group_size == 8 ? cta_groups8 : cta_groups4;
+  static_cta_schedule = gpgpu_ctx->device_runtime->g_interleaved_thread_to_pixel == true ? cta_groups4_interleaved1 : cta_groups4_4096;
 
   m_cluster = new simt_core_cluster *[m_shader_config->n_simt_clusters];
   for (unsigned i = 0; i < m_shader_config->n_simt_clusters; i++)

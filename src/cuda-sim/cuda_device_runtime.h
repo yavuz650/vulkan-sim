@@ -49,6 +49,7 @@ class cuda_device_runtime {
   int g_max_sim_rt_kernels;
   bool g_custom_cta_scheduling;
   int g_cta_group_size;
+  bool g_interleaved_thread_to_pixel;
 
   // backward pointer
   class gpgpu_context* gpgpu_ctx;
