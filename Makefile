@@ -83,9 +83,9 @@ ifneq ($(GPGPUSIM_POWER_MODEL),)
 	LIBS += mcpat
 
 
-	ifeq ($(DEBUG), 1)
-		MCPAT_DBG_FLAG = dbg
-	endif
+
+	MCPAT_DBG_FLAG = dbg
+
 
 	MCPAT_OBJ_DIR = $(SIM_OBJ_FILES_DIR)/gpuwattch
 
