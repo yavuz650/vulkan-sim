@@ -2434,7 +2434,9 @@ void VulkanRayTracing::dump_descriptor_set_for_AS(uint32_t setID, uint32_t descI
 {
     FILE *fp;
     char *mesa_root = getenv("MESA_ROOT");
-    char *filePath = "gpgpusimShaders/";
+    //char *filePath = "gpgpusimShaders/";
+    char filePath[80];
+    snprintf(filePath, sizeof(filePath), "gpgpusimShaders/%d/", (int)getpid());
     char *extension = ".vkdescrptorsetdata";
 
     int VkDescriptorTypeNum;
@@ -2540,7 +2542,9 @@ void VulkanRayTracing::dump_descriptor_set(uint32_t setID, uint32_t descID, void
 {
     FILE *fp;
     char *mesa_root = getenv("MESA_ROOT");
-    char *filePath = "gpgpusimShaders/";
+    //char *filePath = "gpgpusimShaders/";
+    char filePath[80];
+    snprintf(filePath, sizeof(filePath), "gpgpusimShaders/%d/", (int)getpid());
     char *extension = ".vkdescrptorsetdata";
 
     int VkDescriptorTypeNum;
@@ -2747,7 +2751,9 @@ void VulkanRayTracing::dump_callparams_and_sbt(void *raygen_sbt, void *miss_sbt,
 {
     FILE *fp;
     char *mesa_root = getenv("MESA_ROOT");
-    char *filePath = "gpgpusimShaders/";
+    //char *filePath = "gpgpusimShaders/";
+    char filePath[80];
+    snprintf(filePath, sizeof(filePath), "gpgpusimShaders/%d/", (int)getpid());
 
     char call_params_filename [200];
     int trace_rays_call_count = 0; // just a placeholder for now
