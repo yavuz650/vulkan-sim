@@ -970,7 +970,7 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
                         float world_thit = thit / worldToObject_tMultiplier;
 
                         //TODO: why the Tmin Tmax consition wasn't handled in the object coordinates?
-                        if(hit && Tmin <= world_thit && world_thit <= Tmax)
+                        if(hit && Tmin <= world_thit && world_thit <= Tmax && world_thit < min_thit)
                         {
                             if (debugTraversal)
                             {
