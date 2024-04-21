@@ -295,6 +295,22 @@ public:
                        int payload,
                        const ptx_instruction *pI,
                        ptx_thread_info *thread);
+    
+    static void traceRay_BFS( // called by raygen shader
+                       VkAccelerationStructureKHR _topLevelAS,
+    				   uint rayFlags,
+                       uint cullMask,
+                       uint sbtRecordOffset,
+                       uint sbtRecordStride,
+                       uint missIndex,
+                       float3 origin,
+                       float Tmin,
+                       float3 direction,
+                       float Tmax,
+                       int payload,
+                       const ptx_instruction *pI,
+                       ptx_thread_info *thread);
+    
     static void endTraceRay(const ptx_instruction *pI, ptx_thread_info *thread);
     
     static void load_descriptor(const ptx_instruction *pI, ptx_thread_info *thread);
