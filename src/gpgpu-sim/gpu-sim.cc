@@ -7413,6 +7413,10 @@ void gpgpu_sim_config::reg_options(option_parser_t opp) {
   m_shader_config.reg_options(opp);
   m_memory_config.reg_options(opp);
   power_config::reg_options(opp);
+  option_parser_register(opp, "-BFS_based_traversal", OPT_BOOL, &BFS_based_traversal,
+                         "selects which traceRay traversal function to use, 0 = default DFS, 1 = BFS based", "0");
+  option_parser_register(opp, "-stack_trend_prefetch", OPT_BOOL, &stack_trend_prefetch,
+                         "predict and prefetch next accesses from traversal stack/queue", "0");
   option_parser_register(opp, "-gpgpu_intermittent_stats", OPT_BOOL, &gpu_intermittent_stats,
                          "print intermittent stats", "0");
   option_parser_register(opp, "-gpgpu_intermittent_stats_freq", OPT_INT64, &gpu_intermittent_stats_freq,
@@ -7778,6 +7782,12 @@ gpgpu_sim::gpgpu_sim(const gpgpu_sim_config &config, gpgpu_context *ctx)
   // Jin: functional simulation for CDP
   m_functional_sim = false;
   m_functional_sim_kernel = NULL;
+
+  std::remove("memory_accesses_per_thread.txt");
+  std::remove("memory_accesses_per_warp.txt");
+  std::remove("prefetch_addresses.txt");
+  std::remove("warps.txt");
+  std::remove("closest_hits.txt");
 }
 
 int gpgpu_sim::shared_mem_size() const {

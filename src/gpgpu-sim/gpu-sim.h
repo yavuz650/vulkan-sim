@@ -61,6 +61,7 @@
 #define CREATELOG 111
 #define SAMPLELOG 222
 #define DUMPLOG 333
+
 class gpgpu_context;
 
 extern tr1_hash_map<new_addr_type, unsigned> address_random_interleaving;
@@ -377,6 +378,9 @@ class gpgpu_sim_config : public power_config,
 
   bool flush_l1() const { return gpgpu_flush_l1_cache; }
 
+  bool is_BFS_based_traversal() const { return BFS_based_traversal; }
+  bool is_stack_trend_prefetch() const { return stack_trend_prefetch; }
+
  private:
   void init_clock_domains(void);
 
@@ -396,6 +400,8 @@ class gpgpu_sim_config : public power_config,
   double l2_period;
 
   // GPGPU-Sim timing model options
+  bool BFS_based_traversal;
+  bool stack_trend_prefetch;
   bool gpu_intermittent_stats;
   int gpu_intermittent_stats_freq;
   unsigned long long gpu_max_cycle_opt;
