@@ -1312,6 +1312,11 @@ class rt_unit : public pipelined_simd_unit {
         void get_L0C_sub_stats(struct cache_sub_stats &css) const;
 
         unsigned active_warps();
+
+        void send_prefetch_request(warp_inst_t &inst);
+        mem_fetch* process_prefetch_queue(warp_inst_t &inst);
+
+        std::deque<std::pair<new_addr_type, new_addr_type>> prefetch_mem_access_q; // chunk addr, base addr
         
     protected:
       static std::ofstream cacheAccesFile;
@@ -1354,6 +1359,8 @@ class rt_unit : public pipelined_simd_unit {
       std::deque<std::pair<unsigned, new_addr_type> > mem_store_q;
       
       std::deque<new_addr_type> mem_access_q;
+      bool prefetch_access = false;
+      bool prefetch_opportunity = false;
       unsigned mem_access_q_warp_uid;
       new_addr_type mem_access_q_base_addr;
       int mem_access_q_type;
