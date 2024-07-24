@@ -7203,7 +7203,7 @@ void trace_ray_impl(const ptx_instruction *pI, ptx_thread_info *thread) {
   // thread->dump_regs(stdout);
 
   bool performBFS = GPGPU_Context()->the_gpgpusim->g_the_gpu->get_config().is_BFS_based_traversal();
-  if (performBFS)
+  if (true)
   {
     VulkanRayTracing::traceRay_BFS(_topLevelAS, rayFlags, cullMask, sbtRecordOffset, sbtRecordStride, missIndex,
                     {originX, originY, originZ},

@@ -934,10 +934,24 @@ void warp_inst_t::set_rt_mem_transactions(unsigned int tid, std::vector<MemoryTr
     RTMemoryTransactionRecord mem_record(
       (new_addr_type)it->address,
       it->size,
-      it->type
+      it->type,
+      it->is_prefetch_load
     );
-    m_per_scalar_thread[tid].RT_mem_accesses.push_back(mem_record);
+    if (!it->is_prefetch_load) { m_per_scalar_thread[tid].RT_mem_accesses.push_back(mem_record); }
+    // Prefetcher Addition //
+    if (it->is_prefetch_load)
+    {
+      if (!addressExists(unique_prefetches_per_thread, (new_addr_type)it->address))
+      {
+        unique_prefetches_per_thread.push_back(mem_record);
+        if (unique_prefetches_per_thread.size() > max_unique_prefetch_distance_per_thread) { unique_prefetches_per_thread.pop_front(); }
+        
+        m_per_scalar_thread[tid].RT_mem_accesses.push_back(mem_record);
+      }
+    }
   }
+
+  //unique_prefetches_per_thread.clear();
 }
 
 void warp_inst_t::set_rt_mem_store_transactions(unsigned int tid, std::vector<MemoryStoreTransactionRecord>& transactions) {
@@ -1022,32 +1036,63 @@ void warp_inst_t::set_thread_end_cycle(unsigned long long cycle) {
     }
 }
 
-void warp_inst_t::update_next_rt_accesses() {
+void warp_inst_t::update_next_rt_accesses(std::deque<std::pair<new_addr_type, new_addr_type>>& prefetch_mem_access_q) {
   
   // Iterate through every thread
   for (unsigned i=0; i<m_config->warp_size; i++) {
     if (!m_per_scalar_thread[i].RT_mem_accesses.empty()) {
-      RTMemoryTransactionRecord next_access = m_per_scalar_thread[i].RT_mem_accesses.front();
-      
-      // If "unmarked", this has not been added to queue yet (also make sure intersection is complete)
-      if (next_access.status == RTMemStatus::RT_MEM_UNMARKED && m_per_scalar_thread[i].intersection_delay == 0) {
-        std::pair<new_addr_type, unsigned> address_size_pair (next_access.address, next_access.size);
-        // Add to queue if the same address doesn't already exist
-        if (m_next_rt_accesses_set.find(address_size_pair) == m_next_rt_accesses_set.end()) {
-          m_next_rt_accesses.push_back(next_access);
-          m_next_rt_accesses_set.insert(address_size_pair);
+      bool demand_read_found = false;
+      while (demand_read_found == false)
+      {
+        RTMemoryTransactionRecord next_access = m_per_scalar_thread[i].RT_mem_accesses.front();
+        
+        if (next_access.is_prefetch_load == false)
+        {
+          // If "unmarked", this has not been added to queue yet (also make sure intersection is complete)
+          if (next_access.status == RTMemStatus::RT_MEM_UNMARKED && m_per_scalar_thread[i].intersection_delay == 0) {
+            std::pair<new_addr_type, unsigned> address_size_pair (next_access.address, next_access.size);
+            // Add to queue if the same address doesn't already exist
+            if (m_next_rt_accesses_set.find(address_size_pair) == m_next_rt_accesses_set.end()) {
+              m_next_rt_accesses.push_back(next_access);
+              m_next_rt_accesses_set.insert(address_size_pair);
+            }
+            // Update status
+            m_per_scalar_thread[i].RT_mem_accesses.front().status = RTMemStatus::RT_MEM_AWAITING;
+          }
+          demand_read_found = true;
         }
-        // Update status
-        m_per_scalar_thread[i].RT_mem_accesses.front().status = RTMemStatus::RT_MEM_AWAITING;
+        else if (next_access.is_prefetch_load == true)
+        {
+          //FILE *statfout = fopen("prefetch_addresses.txt", "a");
+          //fprintf(statfout, "Before - %p, %d\n", (new_addr_type)next_access.address, m_per_scalar_thread[i].RT_mem_accesses.size());
+          m_per_scalar_thread[i].RT_mem_accesses.pop_front();
+          //fprintf(statfout, "After - %p, %d\n", (new_addr_type)next_access.address, m_per_scalar_thread[i].RT_mem_accesses.size());
+          //fflush(statfout); fclose(statfout);
+          
+          if (!addressExists(unique_prefetches_per_warp, (new_addr_type)next_access.address))
+          {
+            unique_prefetches_per_warp.push_back(next_access);
+            if (unique_prefetches_per_warp.size() > max_unique_prefetch_distance_per_warp) { unique_prefetches_per_warp.pop_front(); }
+
+            // If the size (of prefetch) is larger than 32B, then split into chunks and add chunks into prefetch_mem_access_q
+            if (next_access.size > 32) {
+              // Create the memory chunks and push to prefetch_mem_access_q
+              for (unsigned j=1; j<((next_access.size+31)/32); j++) {
+                prefetch_mem_access_q.push_back(std::make_pair((new_addr_type)(next_access.address + (j * 32)), (new_addr_type)next_access.address));
+              }
+            }
+          }
+        }
       }
     }
   }
   
+  //unique_prefetches_per_warp.clear();
 }
 
-RTMemoryTransactionRecord warp_inst_t::get_next_rt_mem_transaction() {
+RTMemoryTransactionRecord warp_inst_t::get_next_rt_mem_transaction(std::deque<std::pair<new_addr_type, new_addr_type>>& prefetch_mem_access_q) {
   // Update the list of next accesses
-  update_next_rt_accesses();
+  update_next_rt_accesses(prefetch_mem_access_q);
   RTMemoryTransactionRecord next_access;
   std::pair<new_addr_type, unsigned> address_size_pair;
   

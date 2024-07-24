@@ -258,11 +258,12 @@ typedef struct ImageMemoryTransactionRecord {
 } ImageMemoryTransactionRecord;
 
 typedef struct MemoryTransactionRecord {
-    MemoryTransactionRecord(void* address, uint32_t size, TransactionType type)
-    : address(address), size(size), type(type) {}
+    MemoryTransactionRecord(void* address, uint32_t size, TransactionType type, bool is_prefetch_load=false)
+    : address(address), size(size), type(type), is_prefetch_load(is_prefetch_load) {}
     void* address;
     uint32_t size;
     TransactionType type;
+    bool is_prefetch_load;
 } MemoryTransactionRecord;
 
 typedef struct MemoryStoreTransactionRecord {
@@ -1244,13 +1245,14 @@ typedef struct RTMemoryTransactionRecord {
     new_addr_type address;
     uint32_t size;
     TransactionType type;
+    bool is_prefetch_load;
     std::bitset<4> mem_chunks;
     RTMemStatus status;
     RTMemoryTransactionRecord() {
       status = RT_MEM_UNMARKED;
     }
-    RTMemoryTransactionRecord(new_addr_type address, uint32_t size, TransactionType type)
-    : address(address), size(size), type(type) {
+    RTMemoryTransactionRecord(new_addr_type address, uint32_t size, TransactionType type, bool is_prefetch_load=false)
+    : address(address), size(size), type(type), is_prefetch_load(is_prefetch_load) {
       // Break into 32B chunks
       mem_chunks.reset();
       for (unsigned i=0; i<(size + 31)/32; i++) {
@@ -1502,8 +1504,8 @@ class warp_inst_t : public inst_t {
   unsigned long long get_thread_end_cycle(unsigned int tid) const { return m_per_scalar_thread[tid].end_cycle; }
   void set_thread_end_cycle(unsigned long long cycle);
   
-  void update_next_rt_accesses();
-  RTMemoryTransactionRecord get_next_rt_mem_transaction();
+  void update_next_rt_accesses(std::deque<std::pair<new_addr_type, new_addr_type>>& prefetch_mem_access_q);
+  RTMemoryTransactionRecord get_next_rt_mem_transaction(std::deque<std::pair<new_addr_type, new_addr_type>>& prefetch_mem_access_q);
   void num_unique_mem_access(std::map<new_addr_type, unsigned> &addr_set);
   unsigned process_returned_mem_access(const mem_fetch *mf);
   bool process_returned_mem_access(const mem_fetch *mf, unsigned tid);
@@ -1523,6 +1525,23 @@ class warp_inst_t : public inst_t {
   unsigned long long get_start_cycle() const {return m_start_cycle; }
   bool has_pred() const { return m_has_pred; }
   void set_pred() { m_has_pred = true; }
+
+  // Prefetcher Addition //
+  std::deque<RTMemoryTransactionRecord> unique_prefetches_per_thread;
+  // Change this to 16, 32, ... 128
+  int max_unique_prefetch_distance_per_thread = 100000;
+  bool addressExists(const std::deque<RTMemoryTransactionRecord>& deque, new_addr_type address) {
+    for (const auto& record : deque) {
+      if (record.address == address) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  std::deque<RTMemoryTransactionRecord> unique_prefetches_per_warp;
+  // Change this to 16, 32, ... 128
+  int max_unique_prefetch_distance_per_warp = 100000;
   
  protected:
   unsigned m_uid;

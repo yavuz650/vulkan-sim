@@ -3542,7 +3542,6 @@ mem_fetch* rt_unit::process_memory_access_queue(warp_inst_t &inst) {
 void rt_unit::process_cache_access(baseline_cache *cache, warp_inst_t &inst, mem_fetch *mf) {
   assert(mf != NULL);
 
-  enum cache_request_status status;
   enum cache_request_status status = MISS;
   std::list<cache_event> events;
       
@@ -3686,17 +3685,6 @@ void rt_unit::process_cache_access(baseline_cache *cache, warp_inst_t &inst, mem
         }
         m_stats->gpgpu_n_rt_mem[mem_access_q_type]--;
       }
-    }
-    else {
-      RT_DPRINTF("Shader %d: Reservation fail, undoing request for 0x%x (base 0x%x)\n", m_sid, mf->get_uncoalesced_addr(), mf->get_uncoalesced_base_addr());
-      if (mem_chunk) {
-        mem_access_q.push_front(mf->get_uncoalesced_addr());
-      }
-      else {
-        if (m_config->m_rt_coherence_engine) m_ray_coherence_engine->undo_access(mf->get_uncoalesced_addr());
-        else inst.undo_rt_access(mf->get_uncoalesced_addr());
-      }
-      m_stats->gpgpu_n_rt_mem[mem_access_q_type]--;
     }
     delete mf;
   }

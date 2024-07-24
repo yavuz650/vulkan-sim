@@ -455,6 +455,7 @@ VkAccelerationStructureKHR topLevelAS_first = NULL;
 bool debugPrefetcher = false;
 bool debugTransactions = false;
 bool debugClosestHits = false;
+bool debugEliminations = false;
 uint8_t stack_trend = 0;
 uint8_t num_of_prefetches = 0;
 void push_ts_trend (std::list<StackEntry> &stack)
@@ -485,15 +486,15 @@ uint8_t pop_ts_trend(std::list<StackEntry> &stack, bool is_BFS_based_traversal)
 
     if (is_BFS_based_traversal)
     {
-        if (stack_trend == 3) { prefetches = 8; }
-        if (stack_trend == 2) { prefetches = 4; }
-        if (stack_trend == 1) { prefetches = 2; }
+        if (stack_trend == 3) { prefetches = 16; }
+        if (stack_trend == 2) { prefetches = 2; }
+        if (stack_trend == 1) { prefetches = 1; }
     }
     else
     {
-        if (stack_trend == 3) { prefetches = 8; }
-        if (stack_trend == 2) { prefetches = 4; }
-        if (stack_trend == 1) { prefetches = 2; }
+        if (stack_trend == 3) { prefetches = 16; }
+        if (stack_trend == 2) { prefetches = 2; }
+        if (stack_trend == 1) { prefetches = 1; }
     }
 
     if (debugPrefetcher)
@@ -1207,7 +1208,7 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
                             if (skipAnyHitShader && world_thit < min_thit) {
                                 min_thit = thit / worldToObject_tMultiplier;
                             }
-                            min_thit = thit / node_worldToObject_tMultiplier;
+                            min_thit = thit / worldToObject_tMultiplier;
                             if (debugTraversal)
                                 traversalFile << "\nUpdated Closest Hit\n";
                             min_thit_object = thit;
@@ -1633,6 +1634,13 @@ void VulkanRayTracing::traceRay_BFS(VkAccelerationStructureKHR _topLevelAS,
         }
     }
 
+    int functional_cycle = 0;
+    int tlas_eliminations = 0;
+    int tlas_accesses = 0;
+    int blas_eliminations = 0;
+    int blas_accesses = 0;
+    bool found_primitive_hit = false;
+
     while (!stack.empty())
     {
         uint8_t *node_addr = NULL;
@@ -1647,6 +1655,7 @@ void VulkanRayTracing::traceRay_BFS(VkAccelerationStructureKHR _topLevelAS,
         Ray node_objectRay;
         float node_worldToObject_tMultiplier;
         
+        //if ( (functional_cycle < 25) )
         if (GPGPU_Context()->the_gpgpusim->g_the_gpu->get_config().is_BFS_based_traversal())
         {
             next_node_addr = stack.front().addr;
@@ -1718,7 +1727,14 @@ void VulkanRayTracing::traceRay_BFS(VkAccelerationStructureKHR _topLevelAS,
 
                     child_hit[i] = ray_box_test(lo, hi, idir, ray.get_origin(), ray.get_tmin(), ray.get_tmax(), thit[i]);
                     if(child_hit[i] && thit[i] >= min_thit)
+                    {
                         child_hit[i] = false;
+                        tlas_eliminations++;
+                    }
+                    else if (child_hit[i] && thit[i] < min_thit)
+                    {
+                        tlas_accesses++;
+                    }
 
                     
                     if (debugTraversal)
@@ -1876,7 +1892,14 @@ void VulkanRayTracing::traceRay_BFS(VkAccelerationStructureKHR _topLevelAS,
 
                     child_hit[i] = ray_box_test(lo, hi, idir, node_objectRay.get_origin(), node_objectRay.get_tmin(), node_objectRay.get_tmax(), thit[i]);
                     if(child_hit[i] && thit[i] >= min_thit * node_worldToObject_tMultiplier)
+                    {
                         child_hit[i] = false;
+                        blas_eliminations++;
+                    }
+                    else if (child_hit[i] && thit[i] < min_thit * node_worldToObject_tMultiplier)
+                    {
+                        blas_accesses++;
+                    }
 
                     if (debugTraversal)
                     {
@@ -1984,8 +2007,10 @@ void VulkanRayTracing::traceRay_BFS(VkAccelerationStructureKHR _topLevelAS,
                 float world_thit = thit / node_worldToObject_tMultiplier;
 
                 //TODO: why the Tmin Tmax consition wasn't handled in the object coordinates?
-                if(hit && Tmin <= world_thit && world_thit <= Tmax && world_thit <= min_thit)
+                if(hit && Tmin <= world_thit && world_thit <= Tmax && world_thit < min_thit)
                 {
+                    found_primitive_hit = true;
+
                     if (debugTraversal)
                     {
                         traversalFile << "quad node " << (void *)leaf_addr << ", primitiveID " << leaf.PrimitiveIndex0 << " is a valid hit. world_thit = " << thit / node_worldToObject_tMultiplier << " min_thit = " << min_thit;
@@ -2118,6 +2143,22 @@ void VulkanRayTracing::traceRay_BFS(VkAccelerationStructureKHR _topLevelAS,
                 store_transactions.insert(store_transactions.end(), intersectionTransactions.second.begin(), intersectionTransactions.second.end());
             }
         }
+
+        if (debugEliminations)
+        {
+            FILE *statfout = fopen("prefetch_addresses.txt", "a");
+            fprintf(statfout, "functional_cycle=%d : tlas=%d/%d, blas=%d/%d\n", functional_cycle, tlas_eliminations, tlas_accesses, blas_eliminations, blas_accesses);
+            fflush(statfout); fclose(statfout);
+        }
+
+        functional_cycle++;
+    }
+    
+    if (debugEliminations)
+    {
+        FILE *statfout = fopen("prefetch_addresses.txt", "a");
+        fprintf(statfout, "\n");
+        fflush(statfout); fclose(statfout);
     }
 
     if (min_thit < ray.dir_tmax.w)
