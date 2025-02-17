@@ -939,6 +939,7 @@ void warp_inst_t::set_rt_mem_transactions(unsigned int tid, std::vector<MemoryTr
     );
     if (!it->is_prefetch_load) { m_per_scalar_thread[tid].RT_mem_accesses.push_back(mem_record); }
     // Prefetcher Addition //
+    // Prefetches are added to RT_mem_accesses here but they will be separated into 'mem_access_q' and 'prefetch_mem_access_q' in update_next_rt_accesses()
     if (it->is_prefetch_load)
     {
       if (!addressExists(unique_prefetches_per_thread, (new_addr_type)it->address))
@@ -951,7 +952,7 @@ void warp_inst_t::set_rt_mem_transactions(unsigned int tid, std::vector<MemoryTr
     }
   }
 
-  //unique_prefetches_per_thread.clear();
+  unique_prefetches_per_thread.clear();
 }
 
 void warp_inst_t::set_rt_mem_store_transactions(unsigned int tid, std::vector<MemoryStoreTransactionRecord>& transactions) {
@@ -1087,7 +1088,7 @@ void warp_inst_t::update_next_rt_accesses(std::deque<std::pair<new_addr_type, ne
     }
   }
   
-  //unique_prefetches_per_warp.clear();
+  unique_prefetches_per_warp.clear();
 }
 
 RTMemoryTransactionRecord warp_inst_t::get_next_rt_mem_transaction(std::deque<std::pair<new_addr_type, new_addr_type>>& prefetch_mem_access_q) {

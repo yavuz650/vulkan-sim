@@ -1529,7 +1529,7 @@ class warp_inst_t : public inst_t {
   // Prefetcher Addition //
   std::deque<RTMemoryTransactionRecord> unique_prefetches_per_thread;
   // Change this to 16, 32, ... 128
-  int max_unique_prefetch_distance_per_thread = 100000;
+  int max_unique_prefetch_distance_per_thread = 16;
   bool addressExists(const std::deque<RTMemoryTransactionRecord>& deque, new_addr_type address) {
     for (const auto& record : deque) {
       if (record.address == address) {
@@ -1541,7 +1541,7 @@ class warp_inst_t : public inst_t {
 
   std::deque<RTMemoryTransactionRecord> unique_prefetches_per_warp;
   // Change this to 16, 32, ... 128
-  int max_unique_prefetch_distance_per_warp = 100000;
+  int max_unique_prefetch_distance_per_warp = 16;
   
  protected:
   unsigned m_uid;

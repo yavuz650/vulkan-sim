@@ -1802,6 +1802,8 @@ class shader_core_config : public core_config {
   char * m_rt_coherence_engine_config_str;
   ray_coherence_config m_rt_coherence_engine_config;
   bool bypassL0Complet;
+  bool bypassL1forPrefetches;
+  bool bypassL1forNonRTloads;
   unsigned m_rt_intersection_table_type;
 };
 

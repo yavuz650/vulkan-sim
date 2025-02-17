@@ -277,6 +277,14 @@ void shader_core_config::reg_options(class OptionParser *opp) {
       "bypass RT cache and connect RT unit directly to interconnect ",
       "0");
   option_parser_register(
+      opp, "-bypassL1forPrefetches", OPT_BOOL, &bypassL1forPrefetches,
+      "bypass RT cache for prefetches ",
+      "0");
+  option_parser_register(
+    opp, "-bypassL1forNonRTloads", OPT_BOOL, &bypassL1forNonRTloads,
+    "bypass RT cache for Non RT loads ",
+    "0");
+  option_parser_register(
       opp, "-gpgpu_rt_max_warps", OPT_UINT32, &m_rt_max_warps,
       "max number of warps concurrently in one rt core ",
       "0");

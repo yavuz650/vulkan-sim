@@ -2413,7 +2413,6 @@ void ldst_unit::L1_latency_queue_cycle() {
                         m_core->get_gpu()->gpu_sim_cycle +
                             m_core->get_gpu()->gpu_tot_sim_cycle,
                         events);
-
       bool write_sent = was_write_sent(events);
       bool read_sent = was_read_sent(events);
 
@@ -2528,7 +2527,7 @@ bool ldst_unit::memory_cycle(warp_inst_t &inst,
   const mem_access_t &access = inst.accessq_back();
 
   bool bypassL1D = false;
-  if (CACHE_GLOBAL == inst.cache_op || (m_L1D == NULL)) {
+  if (CACHE_GLOBAL == inst.cache_op || (m_L1D == NULL) || m_config->bypassL1forNonRTloads) {
     bypassL1D = true;
   } else if (inst.space.is_global()) {  // global memory access
     // skip L1 cache if the option is enabled
@@ -3022,7 +3021,7 @@ void rt_unit::cycle() {
       cacheline_count++;
                             
       // Update cache
-      if (!m_config->bypassL0Complet) {
+      if (!(m_config->bypassL0Complet || (mf->is_prefetched() && m_config->bypassL1forPrefetches))) {
         if (m_config->m_rt_use_l1d) {
           L1D->fill( mf, m_core->get_gpu()->gpu_sim_cycle +
                           m_core->get_gpu()->gpu_tot_sim_cycle);
@@ -3064,6 +3063,7 @@ void rt_unit::cycle() {
     if (m_current_warps.find(mem_access_q_warp_uid) == m_current_warps.end()) {
       printf("Memory chunk original warp not found (w_uid: %d); erasing memory accesses starting with 0x%x.\n", mem_access_q_warp_uid, mem_access_q.front());
       mem_access_q.clear();
+      prefetch_mem_access_q.clear();
       if (mem_store_q.empty()) {
         schedule_next_warp(rt_inst);
       }
@@ -3095,7 +3095,7 @@ void rt_unit::cycle() {
 
   // Prefetcher Addition //
   prefetch_access = false;
-  // Schedule a prefetch request first (Prioritize demand loads)
+  // Schedule a prefetch request first (Prioritize prefetch loads)
   /*if (!prefetch_mem_access_q.empty() && !m_current_warps.empty()) {
     warp_inst_t dummy_rt_inst = m_current_warps.begin()->second;
     send_prefetch_request(dummy_rt_inst);
@@ -3207,7 +3207,7 @@ void rt_unit::process_memory_response(mem_fetch* mf, warp_inst_t &pipe_reg) {
     } 
     
     // If not coalescing warps
-    else if (!m_config->bypassL0Complet){
+    else if (!(m_config->bypassL0Complet || (mf->is_prefetched() && m_config->bypassL1forPrefetches))){
       // Check MSHR for all accessed to this address
       std::list<mem_fetch *> response_mf;
       if (m_config->m_rt_use_l1d) {
@@ -3472,11 +3472,9 @@ mem_fetch* rt_unit::process_memory_chunks(warp_inst_t &inst) {
   m_stats->gpgpu_n_rt_mem[mem_access_q_type]++;
 
   // Remove duplicate entries from prefetch queue (Same as Treelet code)
-  if (true) {
-    for (int idx = 0; idx < prefetch_mem_access_q.size(); idx++) {
-      if (next_addr == prefetch_mem_access_q[idx].first) {
+  for (int idx = prefetch_mem_access_q.size() - 1; idx >= 0; --idx) {
+    if (next_addr == prefetch_mem_access_q[idx].first) {
         prefetch_mem_access_q.erase(prefetch_mem_access_q.begin() + idx);
-      }
     }
   }
   
@@ -3528,11 +3526,9 @@ mem_fetch* rt_unit::process_memory_access_queue(warp_inst_t &inst) {
   m_stats->gpgpu_n_rt_mem[mem_access_q_type]++;
 
   // Remove duplicate entries from prefetch queue (Same as Treelet code)
-  if (true) {
-    for (int idx = 0; idx < prefetch_mem_access_q.size(); idx++) {
-      if (next_addr == prefetch_mem_access_q[idx].first) {
+  for (int idx = prefetch_mem_access_q.size() - 1; idx >= 0; --idx) {
+    if (next_addr == prefetch_mem_access_q[idx].first) {
         prefetch_mem_access_q.erase(prefetch_mem_access_q.begin() + idx);
-      }
     }
   }
 
@@ -3545,7 +3541,7 @@ void rt_unit::process_cache_access(baseline_cache *cache, warp_inst_t &inst, mem
   enum cache_request_status status = MISS;
   std::list<cache_event> events;
       
-  if (m_config->bypassL0Complet) {
+  if (m_config->bypassL0Complet || (mf->is_prefetched() && m_config->bypassL1forPrefetches)) {
     // bypass L1 cache
     unsigned control_size = 8;
     unsigned size = mf->get_access_size() + control_size;
@@ -4048,7 +4044,7 @@ void ldst_unit::cycle() {
                                       // on load miss only
 
         bool bypassL1D = false;
-        if (CACHE_GLOBAL == mf->get_inst().cache_op || (m_L1D == NULL)) {
+        if (CACHE_GLOBAL == mf->get_inst().cache_op || (m_L1D == NULL) || m_config->bypassL1forNonRTloads) {
           bypassL1D = true;
         } else if (mf->get_access_type() == GLOBAL_ACC_R ||
                    mf->get_access_type() ==
