@@ -126,7 +126,8 @@ class shd_warp_t {
   }
   void init(address_type start_pc, unsigned cta_id, unsigned wid,
             const std::bitset<MAX_WARP_SIZE> &active,
-            unsigned dynamic_warp_id) {
+            unsigned dynamic_warp_id, unsigned kernel_cta_id) {
+    m_kernel_cta_id = kernel_cta_id;
     m_cta_id = cta_id;
     m_warp_id = wid;
     m_dynamic_warp_id = dynamic_warp_id;
@@ -242,6 +243,7 @@ class shd_warp_t {
   void check_time_out();
 
   unsigned get_cta_id() const { return m_cta_id; }
+  unsigned get_kernel_cta_id() const { return m_kernel_cta_id; }
 
   unsigned get_dynamic_warp_id() const { return m_dynamic_warp_id; }
   unsigned get_warp_id() const { return m_warp_id; }
@@ -251,6 +253,7 @@ class shd_warp_t {
   static const unsigned IBUFFER_SIZE = 2;
   class shader_core_ctx *m_shader;
   unsigned m_cta_id;
+  unsigned m_kernel_cta_id;
   unsigned m_warp_id;
   unsigned m_warp_size;
   unsigned m_dynamic_warp_id;
@@ -2230,6 +2233,7 @@ class shader_core_ctx : public core_t {
   float get_current_occupancy(unsigned long long &active,
                               unsigned long long &total) const;
 
+  const std::vector<shd_warp_t *>& get_shd_warps() {return m_warp;}
   // used by pipeline timing model components:
   // modifiers
   void mem_instruction_stats(const warp_inst_t &inst);
