@@ -72,7 +72,8 @@
 #define WRITE_MASK_SIZE 8
 
 class gpgpu_context;
-
+extern std::map<int,std::vector<int>> rt_start_finish_cycles;
+extern std::map<int,std::vector<std::array<int,15>>> rt_warp_latency_dist;
 enum exec_unit_type_t {
   NONE = 0,
   SP = 1,
@@ -1852,6 +1853,7 @@ struct shader_core_stats_pod {
   // Ray tracing aerialvision stats
   unsigned *rt_nwarps;
   unsigned *rt_nthreads;
+  unsigned *rt_nfinished_threads;
   unsigned *rt_naccesses;
   unsigned *rt_nthreads_intersection;
   unsigned *rt_max_coalesce;
@@ -2046,6 +2048,7 @@ class shader_core_stats : public shader_core_stats_pod {
     rt_total_intersection_stages = (unsigned long long *)calloc(config->num_shader(), sizeof(unsigned long long));
     rt_nwarps = (unsigned *)calloc(config->num_shader(), sizeof(unsigned));
     rt_nthreads = (unsigned *)calloc(config->num_shader(), sizeof(unsigned));
+    rt_nfinished_threads = (unsigned *)calloc(config->num_shader(), sizeof(unsigned));
     rt_naccesses = (unsigned *)calloc(config->num_shader(), sizeof(unsigned));
     rt_max_coalesce = (unsigned *)calloc(config->num_shader(), sizeof(unsigned));
     rt_mshr_size = (unsigned *)calloc(config->num_shader(), sizeof(unsigned));

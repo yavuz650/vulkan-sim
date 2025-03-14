@@ -52,6 +52,18 @@
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 
+std::map<int,std::vector<int>> rt_start_finish_cycles;
+// key is ctaid, value is latency distributions as in `status_num_cycles`
+std::map<int,std::vector<std::array<int,15>>> rt_warp_latency_dist;
+std::ofstream rtCacheAccesFile;
+std::string rtCacheAccessFileName;
+std::ofstream rtWarpTimelineFile;
+std::string rtWarpTimelineFileName;
+int rtCacheAccessIdx;
+std::ofstream L1CacheAccesFile;
+std::string L1CacheAccessFileName;
+int L1CacheAccessIdx;
+
 mem_fetch *shader_core_mem_fetch_allocator::alloc(
     new_addr_type addr, mem_access_type type, unsigned size, bool wr,
     unsigned long long cycle) const {
@@ -1066,6 +1078,10 @@ void shader_core_stats::visualizer_print(gzFile visualizer_file) {
   for (unsigned i = 0; i < m_config->num_shader(); i++)
     gzprintf(visualizer_file, "%u ", rt_nthreads[i]);
   gzprintf(visualizer_file, "\n");
+  gzprintf(visualizer_file, "rt_nfinished_threads:  ");
+  for (unsigned i = 0; i < m_config->num_shader(); i++)
+    gzprintf(visualizer_file, "%u ", rt_nfinished_threads[i]);
+  gzprintf(visualizer_file, "\n");
   gzprintf(visualizer_file, "rt_naccesses:  ");
   for (unsigned i = 0; i < m_config->num_shader(); i++)
     gzprintf(visualizer_file, "%u ", rt_naccesses[i]);
@@ -1192,6 +1208,7 @@ void shader_core_ctx::fetch() {
             if (m_threadState[tid].m_active == true) {
               m_threadState[tid].m_active = false;
               unsigned cta_id = m_warp[warp_id]->get_cta_id();
+              cta_start_finish_cycles[m_warp[warp_id]->get_kernel_cta_id()][1] = m_gpu->gpu_sim_cycle;
               if (m_thread[tid] == NULL) {
                 register_cta_thread_exit(cta_id, m_kernel);
               } else {
@@ -2879,6 +2896,8 @@ unsigned rt_unit::active_warps() {
   return warp_ids.size();
 }
 
+std::vector<int> ray_bounce_counter;
+std::vector<MyRTStats> all_rt_stats;
 void rt_unit::cycle() {
   // Debugging roofline plot
   cacheline_count = 0;
@@ -2895,6 +2914,19 @@ void rt_unit::cycle() {
   if (!pipe_reg.empty()) {
     n_warps++;
     RT_DPRINTF("Shader %d: A new warp has arrived! uid: %d, warp id: %d\n", m_sid, pipe_reg.get_uid(), pipe_reg.warp_id());
+    //printf("SM %d Warp %d arrived cycle %llu\n", m_sid, m_core->get_shd_warps()[pipe_reg.warp_id()]->get_kernel_cta_id(), current_cycle);
+    int ctaid = m_core->get_shd_warps()[pipe_reg.warp_id()]->get_kernel_cta_id();
+    if(rt_start_finish_cycles.find(ctaid) != rt_start_finish_cycles.end())
+      rt_start_finish_cycles[ctaid].push_back(current_cycle);
+    else
+      rt_start_finish_cycles.emplace(ctaid,std::vector<int>{current_cycle});
+    pipe_reg.rt_stats.ctaid = ctaid;
+    pipe_reg.rt_stats.active_threads = pipe_reg.active_count();
+    if(ray_bounce_counter.size() < ctaid+1)
+      ray_bounce_counter.resize(ctaid+1,0);
+    ray_bounce_counter[ctaid]++;
+    pipe_reg.rt_stats.ray_bounce_number = ray_bounce_counter[ctaid];
+    
     // for (unsigned i=0; i<m_config->warp_size; i++) {
     //   RT_DPRINTF("\tThread %d (%d mem): ", i, pipe_reg.mem_list_length(i));
     //   for (auto it=pipe_reg.get_thread_info(i).RT_mem_accesses.begin(); it!=pipe_reg.get_thread_info(i).RT_mem_accesses.end(); it++) {
@@ -2903,6 +2935,20 @@ void rt_unit::cycle() {
     //   RT_DPRINTF("\n");
     // }
     
+    if (false)
+    {
+      FILE *statfout = fopen("memory_accesses_per_thread.txt", "a");
+      for (unsigned i=0; i<m_config->warp_size; i++) {
+        fprintf(statfout, "tid=%u (%d mem) uid=%u schd_id=%u: ", i, pipe_reg.mem_list_length(i), pipe_reg.get_thread_info(i).m_uid, pipe_reg.get_schd_id());
+        for (const auto& access : pipe_reg.get_thread_info(i).RT_mem_accesses) {
+          fprintf(statfout, "%p (%d)\t", reinterpret_cast<void*>(access.address), access.type);
+        }
+        fprintf(statfout, "\n");
+      }
+      fflush(statfout);
+      fclose(statfout);
+    }
+
     pipe_reg.set_start_cycle(current_cycle);
     pipe_reg.set_thread_end_cycle(current_cycle);
 
@@ -2927,11 +2973,13 @@ void rt_unit::cycle() {
   // Cycle intersection tests + get stats
   unsigned n_threads = 0;
   unsigned active_threads = 0;
+  unsigned finished_threads = 0;
   std::map<new_addr_type, unsigned> addr_set;
   for (auto it=m_current_warps.begin(); it!=m_current_warps.end(); ++it) {
     n_threads += (it->second).dec_thread_latency(mem_store_q);
     active_threads += (it->second).get_rt_active_threads();
     (it->second).num_unique_mem_access(addr_set);
+    finished_threads += (it->second).get_rt_finished_threads();
   }
   if (m_config->m_rt_coherence_engine) m_ray_coherence_engine->dec_thread_latency();
   // Number of threads currently completing intersection tests are the number of intersection operations this cycle
@@ -2952,6 +3000,7 @@ void rt_unit::cycle() {
   // AerialVision stats
   m_stats->rt_nwarps[m_sid] = n_warps;
   m_stats->rt_nthreads[m_sid] = active_threads;
+  m_stats->rt_nfinished_threads[m_sid] = finished_threads;
   m_stats->rt_naccesses[m_sid] = addr_set.size();
   m_stats->rt_nthreads_intersection[m_sid] = n_threads;
   unsigned max = 0;
@@ -2979,6 +3028,24 @@ void rt_unit::cycle() {
     mf->set_status(IN_SHADER_FETCHED,
                   m_core->get_gpu()->gpu_sim_cycle +
                   m_core->get_gpu()->gpu_tot_sim_cycle);
+    if(m_config->gpgpu_ctx->device_runtime->g_print_cache_transactions) {
+      if(!rtCacheAccesFile.is_open()) {
+          std::time_t raw_time = std::time(0);
+          struct tm *time_info;
+          char time_buf[30];
+          time_info = localtime(&raw_time);
+          strftime(time_buf, sizeof(time_buf), "%d-%m-%Y-%H-%M-%S", time_info);
+          std::string time_offset(time_buf);
+          rtCacheAccessFileName = "rtCacheAccessFile_"+time_offset+".csv";
+          std::cout << "Writing RT cache access to file " << rtCacheAccessFileName << std::endl;
+          rtCacheAccesFile.open(rtCacheAccessFileName,std::ofstream::out);
+          rtCacheAccesFile << "idx,smid,kernel_ctaid,dynamic_warpid,address,req_cycle,ret_cycle,status\n";
+      }
+      rtCacheAccesFile << rtCacheAccessIdx << "," << m_sid << "," << m_core->get_shd_warps()[mf->get_wid()]->get_kernel_cta_id() << "," << mf->get_inst().dynamic_warp_id() << "," << std::hex << mf->get_addr() << "," << std::dec 
+                       << mf->get_timestamp() << "," << m_core->get_gpu()->gpu_sim_cycle + m_core->get_gpu()->gpu_tot_sim_cycle << "," << mf->get_cache_req_stat() << "\n";
+      rtCacheAccessIdx++;
+    }
+
 
     // Handle write ACKs
     if (mf->get_is_write()) {
@@ -3070,6 +3137,25 @@ void rt_unit::cycle() {
   
   // Get cycle status
   if (!rt_inst.empty()) rt_inst.track_rt_cycles(true);
+  // Profile CTA 240. Number is arbitrary, doesn't really matter.
+  if(!rt_inst.empty() && m_config->gpgpu_ctx->device_runtime->g_rt_print_timeline && m_core->get_shd_warps()[rt_inst.warp_id()]->get_kernel_cta_id() == 1027) {
+    if(!rtWarpTimelineFile.is_open()) {
+        std::time_t raw_time = std::time(0);
+        struct tm *time_info;
+        char time_buf[30];
+        time_info = localtime(&raw_time);
+        strftime(time_buf, sizeof(time_buf), "%d-%m-%Y-%H-%M-%S", time_info);
+        std::string time_offset(time_buf);
+        rtWarpTimelineFileName = "rtWarpTimelineFile_"+time_offset+".csv";
+        std::cout << "Writing RT warp(1027) timeline to file " << rtWarpTimelineFileName << std::endl;
+        rtWarpTimelineFile.open(rtWarpTimelineFileName,std::ofstream::out);
+        rtWarpTimelineFile << "ray_bounce_idx,tid,active,stack_full,cycle\n";
+    }
+    int ctaid = m_core->get_shd_warps()[rt_inst.warp_id()]->get_kernel_cta_id();
+    for(int i=0; i<m_config->warp_size; i++) {
+      rtWarpTimelineFile << ray_bounce_counter[ctaid] << "," << i << "," << rt_inst.active(i) << "," << !rt_inst.rt_mem_accesses_empty(i) << "," << m_core->get_gpu()->gpu_sim_cycle + m_core->get_gpu()->gpu_tot_sim_cycle << "\n";
+    }
+  }
   for (auto it=m_current_warps.begin(); it!=m_current_warps.end(); it++) {
     (it->second).track_rt_cycles(false);
   }
@@ -3089,6 +3175,9 @@ void rt_unit::cycle() {
     // A completed warp has no more memory accesses and all the intersection delays are complete and has no pending writes
     if (it->second.rt_mem_accesses_empty() && it->second.rt_intersection_delay_done() && !it->second.has_pending_writes()) {
       RT_DPRINTF("Shader %d: Warp %d (uid: %d) completed!\n", m_sid, it->second.warp_id(), it->first);
+      //printf("SM %d Warp %d completed cycle %llu\n",m_sid, m_core->get_shd_warps()[it->second.warp_id()]->get_kernel_cta_id(), current_cycle);
+      int ctaid = m_core->get_shd_warps()[it->second.warp_id()]->get_kernel_cta_id();
+      rt_start_finish_cycles[ctaid].push_back(current_cycle);
       if (m_operand_collector->writeback(it->second)) {
         m_scoreboard->releaseRegisters(&it->second);
         m_core->warp_inst_complete(it->second);
@@ -3115,6 +3204,10 @@ void rt_unit::cycle() {
 
         // Track thread latency in RT unit
         unsigned long long total_thread_cycles = 0;
+        if(rt_warp_latency_dist.find(ctaid) != rt_warp_latency_dist.end())
+          rt_warp_latency_dist[ctaid].push_back(std::array<int,15>{});
+        else
+          rt_warp_latency_dist.emplace(ctaid, std::vector<std::array<int, 15>>(1));
         for (unsigned i=0; i<m_config->warp_size; i++) {
           if (it->second.thread_active(i)) {
             unsigned long long end_cycle = it->second.get_thread_end_cycle(i);
@@ -3123,6 +3216,14 @@ void rt_unit::cycle() {
             assert(n_total_cycles >= 0);
             total_thread_cycles += n_total_cycles;
             m_stats->add_rt_latency_dist(it->second.get_latency_dist(i));
+            if(m_config->gpgpu_ctx->device_runtime->g_print_rt_start_finish) {
+              unsigned int* update = it->second.get_latency_dist(i);
+              for (unsigned i=0; i<warp_statuses; i++) {
+                for (unsigned j=0; j<ray_statuses; j++) {
+                  rt_warp_latency_dist[ctaid].back()[i*ray_statuses+j] += update[i*ray_statuses + j];
+                }
+              }
+            }
           }
         }
         float avg_thread_cycles = (float)total_thread_cycles / m_config->warp_size;
@@ -3131,6 +3232,7 @@ void rt_unit::cycle() {
         float rt_simt_efficiency = (float)total_thread_cycles / (m_config->warp_size * total_cycles);
         m_stats->rt_total_simt_efficiency += rt_simt_efficiency;
         
+        all_rt_stats.push_back(it->second.rt_stats);
         // Complete max 1 warp per cycle (?)
         break;
       }
@@ -3504,6 +3606,14 @@ void rt_unit::process_cache_access(baseline_cache *cache, warp_inst_t &inst, mem
       m_core->get_gpu()->gpu_sim_cycle + m_core->get_gpu()->gpu_tot_sim_cycle,
       events
     );
+    if(status != MISS) {
+      if(m_config->gpgpu_ctx->device_runtime->g_print_cache_transactions) {
+        assert(rtCacheAccesFile.is_open());
+        rtCacheAccesFile << rtCacheAccessIdx << "," << m_sid << "," << m_core->get_shd_warps()[mf->get_wid()]->get_kernel_cta_id() << "," << mf->get_inst().dynamic_warp_id() << "," << std::hex << mf->get_addr() << "," << std::dec 
+                        << mf->get_timestamp() << "," << m_core->get_gpu()->gpu_sim_cycle + m_core->get_gpu()->gpu_tot_sim_cycle << "," << status << "\n";
+        rtCacheAccessIdx++;
+      }
+    }
   }
   
   new_addr_type addr = mf->get_addr();
@@ -3511,6 +3621,7 @@ void rt_unit::process_cache_access(baseline_cache *cache, warp_inst_t &inst, mem
 
   // Stalled
   if (status == RESERVATION_FAIL) {
+    mf->set_cache_req_stat(3);
     // If write, add back to write queue
     if (mf->get_is_write()) {
       mem_store_q.push_front(
@@ -3555,6 +3666,7 @@ void rt_unit::process_cache_access(baseline_cache *cache, warp_inst_t &inst, mem
   }
   
   else if (status == HIT) {
+    mf->set_cache_req_stat(0);
     RT_DPRINTF("Shader %d: Cache hit for 0x%x (base 0x%x)\n", m_sid, mf->get_uncoalesced_addr(), mf->get_uncoalesced_base_addr());
     
     // Every cache hit is a returned cacheline
@@ -3589,6 +3701,7 @@ void rt_unit::process_cache_access(baseline_cache *cache, warp_inst_t &inst, mem
     if (!mf->is_write()) delete mf;
     
   } else {
+    mf->set_cache_req_stat(2);
     assert(status == MISS);
   }
 }
@@ -4119,6 +4232,12 @@ void gpgpu_sim::shader_print_scheduler_stat(FILE *fout,
 }
 
 void gpgpu_sim::shader_print_cache_stats(FILE *fout) const {
+  if(rtCacheAccesFile.is_open())
+    rtCacheAccesFile.close();  
+  if(L1CacheAccesFile.is_open())
+    L1CacheAccesFile.close();  
+  if(rtWarpTimelineFile.is_open())
+    rtWarpTimelineFile.close();  
   // L1I
   struct cache_sub_stats total_css;
   struct cache_sub_stats css;

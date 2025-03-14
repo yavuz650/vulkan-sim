@@ -76,6 +76,11 @@ enum AdaptiveCache { FIXED = 0, ADAPTIVE_VOLTA = 1 };
 #include <string.h>
 #include <set>
 #include <queue>
+#include <unordered_set>
+#include <map>
+
+// Key: config_idx
+extern std::map <int,std::map<int,std::vector<int>>> coop_warp_configs;
 
 typedef unsigned long long new_addr_type;
 typedef unsigned long long cudaTextureObject_t;
@@ -225,6 +230,34 @@ enum rt_ray_status {
 #include <list>
 #include <map>
 #include <vector>
+#include <chrono>
+#include <limits>
+struct MemAccessType {
+    int tid;
+    void* address;
+    int size; 
+    int type;
+    std::array<void*,6> child_addresses;
+    float thit;
+    void* eliminator_address;
+};
+extern std::vector<MemAccessType> memAccessVector;
+extern std::vector<int> chit_invoke_counters;
+extern std::vector<int> ray_bounce_counter;
+extern unsigned long long g_inst_type_stall[28];
+extern int rt_timing_eliminations;
+// per-traceRay() stat collection
+struct MyRTStats {
+  int ctaid;
+  int total_nodes;
+  int helped_nodes;
+  int active_threads;
+  int ray_bounce_number;
+  MyRTStats() {
+    ctaid=0; total_nodes=0; helped_nodes=0; active_threads=0; ray_bounce_number=0;
+  }
+};
+extern std::vector<MyRTStats> all_rt_stats;
 
 #if !defined(__VECTOR_TYPES_H__)
 #include "vector_types.h"
@@ -258,11 +291,14 @@ typedef struct ImageMemoryTransactionRecord {
 } ImageMemoryTransactionRecord;
 
 typedef struct MemoryTransactionRecord {
-    MemoryTransactionRecord(void* address, uint32_t size, TransactionType type)
-    : address(address), size(size), type(type) {}
+    MemoryTransactionRecord(void* address, uint32_t size, TransactionType type, std::array<void*,6> child_addresses = std::array<void*,6>{nullptr,nullptr,nullptr,nullptr,nullptr,nullptr}, float thit=0, void* eliminator_address=nullptr)
+    : address(address), size(size), type(type), child_addresses(child_addresses), thit(thit), eliminator_address(eliminator_address) {}
     void* address;
     uint32_t size;
     TransactionType type;
+    std::array<void*,6> child_addresses;
+    float thit; // thit of the node
+    void* eliminator_address; // Address of the node that eliminated this node
 } MemoryTransactionRecord;
 
 typedef struct MemoryStoreTransactionRecord {
@@ -1246,17 +1282,21 @@ typedef struct RTMemoryTransactionRecord {
     TransactionType type;
     std::bitset<4> mem_chunks;
     RTMemStatus status;
+    std::array<new_addr_type,6> child_addresses;
+    bool parent_done;
+    float thit;
     RTMemoryTransactionRecord() {
       status = RT_MEM_UNMARKED;
     }
-    RTMemoryTransactionRecord(new_addr_type address, uint32_t size, TransactionType type)
-    : address(address), size(size), type(type) {
+    RTMemoryTransactionRecord(new_addr_type address, uint32_t size, TransactionType type, std::array<new_addr_type,6> child_addresses={0}, float thit = 0)
+    : address(address), size(size), type(type), child_addresses(child_addresses), thit(thit) {
       // Break into 32B chunks
       mem_chunks.reset();
       for (unsigned i=0; i<(size + 31)/32; i++) {
         mem_chunks.set(i);
       }
       status = RT_MEM_UNMARKED;
+      parent_done = false;
     }
 } RTMemoryTransactionRecord;
 
@@ -1470,6 +1510,8 @@ class warp_inst_t : public inst_t {
                                                        // of 4B each)
                                                    
     // RT variables    
+    unsigned int main_thread_id; // thread id of the thread that this thread is helping
+    float min_thit; // thit of the currently closest triangle
     std::deque<RTMemoryTransactionRecord> RT_mem_accesses;
     std::vector<MemoryStoreTransactionRecord> RT_store_transactions;
     bool ray_intersect = false;
@@ -1498,6 +1540,7 @@ class warp_inst_t : public inst_t {
   void print_rt_accesses();
   void print_intersection_delay();
   unsigned get_rt_active_threads();
+  unsigned get_rt_finished_threads();
   std::deque<unsigned> get_rt_active_thread_list();
   unsigned long long get_thread_end_cycle(unsigned int tid) const { return m_per_scalar_thread[tid].end_cycle; }
   void set_thread_end_cycle(unsigned long long cycle);
@@ -1569,6 +1612,7 @@ class warp_inst_t : public inst_t {
   // Jin: cdp support
  public:
   int m_is_cdp;
+  MyRTStats rt_stats;
 };
 
 void move_warp(warp_inst_t *&dst, warp_inst_t *&src);

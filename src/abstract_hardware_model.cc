@@ -931,13 +931,25 @@ void warp_inst_t::set_rt_mem_transactions(unsigned int tid, std::vector<MemoryTr
   
   for (auto it=transactions.begin(); it!=transactions.end(); it++) {
     // Convert transaction type and add to thread
+    std::array<new_addr_type,6> addr_list{(new_addr_type)it->child_addresses[0],
+                                          (new_addr_type)it->child_addresses[1],
+                                          (new_addr_type)it->child_addresses[2],
+                                          (new_addr_type)it->child_addresses[3],
+                                          (new_addr_type)it->child_addresses[4],
+                                          (new_addr_type)it->child_addresses[5]};
     RTMemoryTransactionRecord mem_record(
       (new_addr_type)it->address,
       it->size,
-      it->type
+      it->type,
+      addr_list,
+      it->thit
     );
     m_per_scalar_thread[tid].RT_mem_accesses.push_back(mem_record);
   }
+  // Root node has no parent
+  m_per_scalar_thread[tid].RT_mem_accesses[0].parent_done = true;
+  m_per_scalar_thread[tid].min_thit = std::numeric_limits<float>::max();
+  m_per_scalar_thread[tid].main_thread_id = tid;
 }
 
 void warp_inst_t::set_rt_mem_store_transactions(unsigned int tid, std::vector<MemoryStoreTransactionRecord>& transactions) {
@@ -1005,6 +1017,21 @@ unsigned warp_inst_t::get_rt_active_threads() {
   return active_threads;
 }
 
+unsigned warp_inst_t::get_rt_finished_threads() {
+  // return the number of threads that finished their traversals
+  assert(m_per_scalar_thread_valid);
+  unsigned finished_threads = 0;
+  for (int i=0; i<m_per_scalar_thread.size(); i++) {
+    if (active(i)) {
+      if(m_per_scalar_thread[i].main_thread_id != i)
+        finished_threads++;
+      else if(m_per_scalar_thread[i].RT_mem_accesses.empty())
+        finished_threads++;
+    }
+  }
+  return finished_threads;  
+}
+
 std::deque<unsigned> warp_inst_t::get_rt_active_thread_list() {
   assert(m_per_scalar_thread_valid);
   std::deque<unsigned> active_threads;
@@ -1022,27 +1049,166 @@ void warp_inst_t::set_thread_end_cycle(unsigned long long cycle) {
     }
 }
 
-void warp_inst_t::update_next_rt_accesses() {
-  
-  // Iterate through every thread
-  for (unsigned i=0; i<m_config->warp_size; i++) {
-    if (!m_per_scalar_thread[i].RT_mem_accesses.empty()) {
-      RTMemoryTransactionRecord next_access = m_per_scalar_thread[i].RT_mem_accesses.front();
-      
-      // If "unmarked", this has not been added to queue yet (also make sure intersection is complete)
-      if (next_access.status == RTMemStatus::RT_MEM_UNMARKED && m_per_scalar_thread[i].intersection_delay == 0) {
-        std::pair<new_addr_type, unsigned> address_size_pair (next_access.address, next_access.size);
-        // Add to queue if the same address doesn't already exist
-        if (m_next_rt_accesses_set.find(address_size_pair) == m_next_rt_accesses_set.end()) {
-          m_next_rt_accesses.push_back(next_access);
-          m_next_rt_accesses_set.insert(address_size_pair);
+std::deque<RTMemoryTransactionRecord> find_all_children(const std::deque<RTMemoryTransactionRecord>& original_deque, int node_idx) {
+  std::deque<RTMemoryTransactionRecord> children_deque;
+  std::deque<new_addr_type> addresses_to_process;
+
+  // Start with the second element's child addresses
+  for (new_addr_type child_addr : original_deque[node_idx].child_addresses) {
+    if (child_addr != 0) {
+      addresses_to_process.push_back(child_addr);
+    }
+  }
+
+  while (!addresses_to_process.empty()) {
+    new_addr_type current_address = addresses_to_process.front();
+    addresses_to_process.pop_front();
+
+    // Find the node with the current address in the original deque
+    auto it = std::find_if(original_deque.begin(), original_deque.end(),
+      [current_address](const RTMemoryTransactionRecord& n) { return n.address == current_address; });
+
+    if (it != original_deque.end()) {
+      children_deque.push_back(*it);
+
+      // Add this node's children to be processed
+      for (new_addr_type child_addr : it->child_addresses) {
+        if (child_addr != 0 && 
+          std::find_if(children_deque.begin(), children_deque.end(),
+              [child_addr](const RTMemoryTransactionRecord& n) { return n.address == child_addr; }) == children_deque.end()) {
+          addresses_to_process.push_back(child_addr);
         }
-        // Update status
-        m_per_scalar_thread[i].RT_mem_accesses.front().status = RTMemStatus::RT_MEM_AWAITING;
       }
     }
   }
-  
+
+  return children_deque;
+}
+
+void remove_children_from_original(std::deque<RTMemoryTransactionRecord>& original_deque, const std::deque<RTMemoryTransactionRecord>& children_deque) {
+  std::unordered_set<new_addr_type> children_addresses;
+  for (const auto& child : children_deque) {
+    children_addresses.insert(child.address);
+  }
+
+  original_deque.erase(
+    std::remove_if(original_deque.begin(), original_deque.end(),
+      [&children_addresses](const RTMemoryTransactionRecord& node) {
+        return children_addresses.find(node.address) != children_addresses.end();
+      }),
+    original_deque.end()
+  );
+}
+
+void warp_inst_t::update_next_rt_accesses() {
+
+  bool helped_this_cycle=false;
+  // Iterate through every thread
+  for (unsigned i=0; i<m_config->warp_size; i++) {
+    if(m_config->gpgpu_ctx->device_runtime->g_rt_coop_threads && !helped_this_cycle) {
+      // helper threads push child nodes to main thread's traversal stack.
+      if(!m_config->gpgpu_ctx->device_runtime->g_rt_coop_push_to_own_stack) {
+        if (m_per_scalar_thread[i].RT_mem_accesses.empty()) {
+          // Inactive threads help active threads
+          if(!active(i) && m_per_scalar_thread[i].intersection_delay==0) {
+            int main_thread_id = -1;
+            // Find an active thread that has remaining RT accesses
+            for (int j=0; j < m_config->warp_size; j++) {
+              if(active(j) && !m_per_scalar_thread[j].RT_mem_accesses.empty()) {
+                // Also check if any of the remaining accesses are "legal", i.e. their parents are processed
+                // If taking a type3 node, also take the subsequent node which is either type4 or type5
+                for (int k = 1; k < m_per_scalar_thread[j].RT_mem_accesses.size(); k++) {
+                  if(m_per_scalar_thread[j].RT_mem_accesses[k].parent_done && m_per_scalar_thread[j].RT_mem_accesses[k].status == RTMemStatus::RT_MEM_UNMARKED) {
+                    if(m_per_scalar_thread[j].RT_mem_accesses[k].type==TransactionType::BVH_PRIMITIVE_LEAF_DESCRIPTOR) {
+                      assert(k<m_per_scalar_thread[j].RT_mem_accesses.size()-1);
+                      assert(m_per_scalar_thread[j].RT_mem_accesses[k+1].type==TransactionType::BVH_QUAD_LEAF || m_per_scalar_thread[j].RT_mem_accesses[k+1].type==TransactionType::BVH_QUAD_LEAF_HIT);
+                      main_thread_id = j;
+                      // Save the main thread's id so we can mark its children later
+                      m_per_scalar_thread[i].main_thread_id = j;
+                      // Move the memory access to the helper thread's deque
+                      m_per_scalar_thread[i].RT_mem_accesses.push_back(m_per_scalar_thread[j].RT_mem_accesses[k]);
+                      m_per_scalar_thread[i].RT_mem_accesses.push_back(m_per_scalar_thread[j].RT_mem_accesses[k+1]);
+                      m_per_scalar_thread[j].RT_mem_accesses.erase(m_per_scalar_thread[j].RT_mem_accesses.begin()+k);
+                      m_per_scalar_thread[j].RT_mem_accesses.erase(m_per_scalar_thread[j].RT_mem_accesses.begin()+k);
+                      rt_stats.helped_nodes+=2;
+                      break;
+                    }
+                    else if(m_per_scalar_thread[j].RT_mem_accesses[k].type!=TransactionType::BVH_QUAD_LEAF && m_per_scalar_thread[j].RT_mem_accesses[k].type!=TransactionType::BVH_QUAD_LEAF_HIT){
+                      main_thread_id = j;
+                      // Save the main thread's id so we can mark its children later
+                      m_per_scalar_thread[i].main_thread_id = j;
+                      // Move the memory access to the helper thread's deque
+                      m_per_scalar_thread[i].RT_mem_accesses.push_front(m_per_scalar_thread[j].RT_mem_accesses[k]);
+                      m_per_scalar_thread[j].RT_mem_accesses.erase(m_per_scalar_thread[j].RT_mem_accesses.begin()+k);
+                      rt_stats.helped_nodes++;
+                      break;
+                    }
+                  }
+                }
+              }
+              // Stop searching if we found a thread that needs help
+              if(main_thread_id != -1) {
+                helped_this_cycle = true;
+                break;
+              }
+            }
+          }
+        }
+      }
+      // helper threads push child nodes to their own traversal stack.
+      else {
+        if (m_per_scalar_thread[i].RT_mem_accesses.empty()) {
+          // Idle threads help busy threads
+          if(m_per_scalar_thread[i].intersection_delay==0) {
+            int main_thread_id = -1;
+            std::vector<int> tid_vec = coop_warp_configs[m_config->gpgpu_ctx->device_runtime->g_rt_coop_subwarp_config][i];            
+            // Find a thread that has remaining RT accesses
+            for (int j=0; j < m_config->warp_size; j++) {
+              if(std::find(tid_vec.begin(), tid_vec.end(), j) == tid_vec.end())
+                continue;
+              if(!m_per_scalar_thread[j].RT_mem_accesses.empty()) {
+                for (int k = 1; k < m_per_scalar_thread[j].RT_mem_accesses.size(); k++) {
+                  if(m_per_scalar_thread[j].RT_mem_accesses[k].parent_done && m_per_scalar_thread[j].RT_mem_accesses[k].status == RTMemStatus::RT_MEM_UNMARKED) {
+                    std::deque<RTMemoryTransactionRecord> sub_tree = find_all_children(m_per_scalar_thread[j].RT_mem_accesses, k);
+                    sub_tree.push_front(m_per_scalar_thread[j].RT_mem_accesses[k]);
+                    remove_children_from_original(m_per_scalar_thread[j].RT_mem_accesses,sub_tree);
+                    m_per_scalar_thread[i].RT_mem_accesses = sub_tree;
+                    main_thread_id = m_per_scalar_thread[j].main_thread_id;
+                    // Save the main thread's id so we can mark its children later
+                    m_per_scalar_thread[i].main_thread_id = main_thread_id;
+                    break;       
+                  }
+                }
+              }
+              // Stop searching if we found a thread that needs help
+              if(main_thread_id != -1) {
+                helped_this_cycle = true;
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+    if(!m_per_scalar_thread[i].RT_mem_accesses.empty()) {
+      bool demand_read_found = false;
+      RTMemoryTransactionRecord next_access = m_per_scalar_thread[i].RT_mem_accesses.front();
+      // If "unmarked", this has not been added to queue yet (also make sure intersection is complete)
+      // Also make sure its parent was processed (in case of multiple threads traversing the same ray)
+      if (next_access.status == RTMemStatus::RT_MEM_UNMARKED && m_per_scalar_thread[i].intersection_delay == 0) {
+        if(next_access.parent_done) {
+          std::pair<new_addr_type, unsigned> address_size_pair (next_access.address, next_access.size);
+          // Add to queue if the same address doesn't already exist
+          if (m_next_rt_accesses_set.find(address_size_pair) == m_next_rt_accesses_set.end()) {
+            m_next_rt_accesses.push_back(next_access);
+            m_next_rt_accesses_set.insert(address_size_pair);
+          }
+          // Update status
+          m_per_scalar_thread[i].RT_mem_accesses.front().status = RTMemStatus::RT_MEM_AWAITING;
+        }
+      }
+    }
+  }
 }
 
 RTMemoryTransactionRecord warp_inst_t::get_next_rt_mem_transaction() {
@@ -1122,32 +1288,72 @@ bool warp_inst_t::process_returned_mem_access(const mem_fetch *mf, unsigned tid)
 bool warp_inst_t::process_returned_mem_access(bool &mem_record_done, unsigned tid, new_addr_type addr, new_addr_type uncoalesced_base_addr) {
   bool thread_found = false;
   if (!m_per_scalar_thread[tid].RT_mem_accesses.empty()) {
-    RTMemoryTransactionRecord &mem_record = m_per_scalar_thread[tid].RT_mem_accesses.front();
-    new_addr_type thread_addr = mem_record.address;
-    
-    if (thread_addr == uncoalesced_base_addr) {
+    //RTMemoryTransactionRecord &mem_record = m_per_scalar_thread[tid].RT_mem_accesses.front();    
+    if (m_per_scalar_thread[tid].RT_mem_accesses.front().address == uncoalesced_base_addr) {
       new_addr_type coalesced_base_addr = line_size_based_tag_func(uncoalesced_base_addr, 32);
       unsigned position = (addr - coalesced_base_addr) / 32;
-      std::string bitstring = mem_record.mem_chunks.to_string();
-      RT_DPRINTF("Thread %d received chunk %d (of <%s>)\n", tid, position, bitstring.c_str());
-      mem_record.mem_chunks.reset(position);
+      m_per_scalar_thread[tid].RT_mem_accesses.front().mem_chunks.reset(position);
       
       // If all the bits are clear, the entire data has returned, pop from list
-      if (mem_record.mem_chunks.none()) {
+      if (m_per_scalar_thread[tid].RT_mem_accesses.front().mem_chunks.none()) {
+        RTMemoryTransactionRecord mem_record = m_per_scalar_thread[tid].RT_mem_accesses.front();
+        m_per_scalar_thread[tid].RT_mem_accesses.pop_front();
         // Set up delay of next intersection test
         unsigned n_delay_cycles = m_config->m_rt_intersection_latency.at(mem_record.type);
         m_per_scalar_thread[tid].intersection_delay += n_delay_cycles;
         
         RT_DPRINTF("Thread %d collected all chunks for address 0x%x (size %d)\n", tid, mem_record.address, mem_record.size);
         RT_DPRINTF("Processing data of transaction type %d for %d cycles.\n", mem_record.type, n_delay_cycles);
-        m_per_scalar_thread[tid].RT_mem_accesses.pop_front();
-        mem_record_done = true;
-
+        // Mark the children of the popped node/transaction, which indicates that they can be "legally" popped/read from the stack
+        // If this thread is not active, that means it got this memory access from another thread. Use its thread id for search.
+        unsigned main_thread_id = tid;
+        unsigned traversal_stack_id = m_config->gpgpu_ctx->device_runtime->g_rt_coop_push_to_own_stack ? tid : main_thread_id;
+        assert(active(tid) || m_config->gpgpu_ctx->device_runtime->g_rt_coop_threads);
+        if(m_per_scalar_thread[tid].main_thread_id != tid) {
+          main_thread_id = m_per_scalar_thread[tid].main_thread_id;
+          if(m_config->gpgpu_ctx->device_runtime->g_rt_coop_push_to_own_stack)
+            rt_stats.helped_nodes++;
+        }
+        for(auto &it: m_per_scalar_thread[traversal_stack_id].RT_mem_accesses) {
+          if (std::find(mem_record.child_addresses.begin(), mem_record.child_addresses.end(), it.address) != mem_record.child_addresses.end()) {
+            assert(it.parent_done==false);
+            it.parent_done = true;
+          }
+        }         
+        if(m_config->gpgpu_ctx->device_runtime->g_rt_coop_threads && mem_record.type == TransactionType::BVH_QUAD_LEAF_HIT) {
+          if(mem_record.thit < m_per_scalar_thread[main_thread_id].min_thit) {
+            m_per_scalar_thread[main_thread_id].min_thit = mem_record.thit;
+            // Iterate through the list and eliminate nodes that are farther than this triangle
+            // Do not eliminate primitive nodes. They can only be eliminated if their parent is eliminated.
+            //int i = main_thread_id == tid ? 1 : 0;
+            auto &RT_mem_accesses = m_per_scalar_thread[traversal_stack_id].RT_mem_accesses;
+            for(auto it=RT_mem_accesses.begin(); it != RT_mem_accesses.end();) {
+              if(it->thit >= m_per_scalar_thread[main_thread_id].min_thit &&
+                 it->status == RTMemStatus::RT_MEM_UNMARKED &&
+                 it->type != TransactionType::BVH_PRIMITIVE_LEAF_DESCRIPTOR &&
+                 it->type != TransactionType::BVH_QUAD_LEAF && 
+                 it->type != TransactionType::BVH_QUAD_LEAF_HIT) {
+                
+                auto tmp_deque = find_all_children(RT_mem_accesses,std::distance(RT_mem_accesses.begin(), it));
+                int size_before = RT_mem_accesses.size();
+                it=RT_mem_accesses.erase(it);
+                remove_children_from_original(RT_mem_accesses,tmp_deque);
+                rt_timing_eliminations += size_before - RT_mem_accesses.size();
+                it=RT_mem_accesses.begin();
+              }
+              else
+                it++;
+            }
+          }
+        }
         // Mark triangle hit to store to memory
         if (mem_record.type == TransactionType::BVH_QUAD_LEAF_HIT) {
           m_per_scalar_thread[tid].ray_intersect = true;
           RT_DPRINTF("Buffer store detected for warp %d thread %d\n", m_uid, tid);
         }
+        //m_per_scalar_thread[tid].RT_mem_accesses.pop_front();
+        rt_stats.total_nodes++;
+        mem_record_done = true;
       }
       thread_found = true;
     }

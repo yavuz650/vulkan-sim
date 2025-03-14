@@ -63,7 +63,7 @@
 #define DUMPLOG 333
 
 class gpgpu_context;
-
+extern std::map<int,std::array<int,3>> cta_start_finish_cycles;
 extern tr1_hash_map<new_addr_type, unsigned> address_random_interleaving;
 
 enum dram_ctrl_t { DRAM_FIFO = 0, DRAM_FRFCFS = 1 };
@@ -353,12 +353,14 @@ class gpgpu_sim_config : public power_config,
       if (*s == '\n' || *s == '\r') *s = 0;
       s++;
     }
+    srand(time(0));
     char buf[1024];
     if (g_visualizer_filename == 0x0) {
       snprintf(buf, 1024, "gpgpusim_visualizer__%s.log.gz", date);
     } else {
-      snprintf(buf, 1024, "aerialvision__%s__%s.log.gz", g_visualizer_filename, date);
+      snprintf(buf, 1024, "aerialvision__%d__%s__%s.log.gz", getpid(), g_visualizer_filename, date);
     }
+    std::cout << "writing aerialvision to " << buf << std::endl;
     g_visualizer_filename = strdup(buf);
 
     m_valid = true;

@@ -131,6 +131,9 @@ class mem_fetch {
 
   unsigned get_num_flits(bool simt_to_mem);
 
+  void set_cache_req_stat(int status) { cache_req_status = status;}
+  int get_cache_req_stat() {return cache_req_status;}
+
   mem_fetch *get_original_mf() { return original_mf; }
   mem_fetch *get_original_wr_mf() { return original_wr_mf; }
 
@@ -175,6 +178,9 @@ class mem_fetch {
 
   const memory_config *m_mem_config;
   unsigned icnt_flit_size;
+
+  // Hit, miss etc.
+  int cache_req_status;
 
   mem_fetch
       *original_mf;  // this pointer is set up when a request is divided into

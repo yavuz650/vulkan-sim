@@ -77,6 +77,10 @@ class gpgpu_sim_wrapper {};
 #include <iostream>
 #include <sstream>
 #include <string>
+//begin cycle, end cycle, smid
+std::map<int,std::array<int,3>> cta_start_finish_cycles;
+int rt_timing_eliminations=0;
+std::map <int,std::map<int,std::vector<int>>> coop_warp_configs;
 
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 
@@ -723,9 +727,123 @@ void gpgpu_sim_config::reg_options(option_parser_t opp) {
                          &(gpgpu_ctx->device_runtime->g_max_sim_rt_kernels),
                          "Max simulated kernels, used to limit how many frames we render. Default: 0",
                          "0");
+  option_parser_register(opp, "-print_mem_transactions", OPT_BOOL,
+                         &(gpgpu_ctx->device_runtime->g_print_mem_transactions),
+                         "Enable(1) or disable(0) printing the transactions vector in traceRay() function for all threads, in vulkan_ray_tracing.cc. Default: 0",
+                         "0");
+  option_parser_register(opp, "-print_cache_transactions", OPT_BOOL,
+                         &(gpgpu_ctx->device_runtime->g_print_cache_transactions),
+                         "Enable(1) or disable(0) printing the RT cache accesses in shader.cc. Default: 0",
+                         "0");
+  option_parser_register(opp, "-print_cta_start_finish", OPT_BOOL,
+                         &(gpgpu_ctx->device_runtime->g_print_cta_start_finish),
+                         "Enable(1) or disable(0) printing CTA start/finish cycles. Default: 0",
+                         "0");
+  option_parser_register(opp, "-print_rt_start_finish", OPT_BOOL,
+                         &(gpgpu_ctx->device_runtime->g_print_rt_start_finish),
+                         "Enable(1) or disable(0) printing RT core arrive/complete cycles for all warps. Default: 0",
+                         "0");
+  option_parser_register(opp, "-print_rt_warp_latency_dist", OPT_BOOL,
+                         &(gpgpu_ctx->device_runtime->g_print_rt_warp_latency_dist),
+                         "Enable(1) or disable(0) printing warp latency distribution in RT cores. Default: 0",
+                         "0");                         
+  option_parser_register(opp, "-print_node_parent_map", OPT_BOOL,
+                         &(gpgpu_ctx->device_runtime->g_print_node_parent_map),
+                         "Enable(1) or disable(0) printing node parent map of the BVH tree for ray tracing. Default: 0",
+                         "0");                         
+  option_parser_register(opp, "-rt_coop_threads", OPT_BOOL,
+                         &(gpgpu_ctx->device_runtime->g_rt_coop_threads),
+                         "Enable(1) or disable(0) multi-thread BVH traversal for RT. Default: 0",
+                         "0");
+  option_parser_register(opp, "-rt_coop_push_to_own_stack", OPT_BOOL,
+                         &(gpgpu_ctx->device_runtime->g_rt_coop_push_to_own_stack),
+                         "Enable(1) or disable(0) helper threads push child nodes to their own stacks, instead of the main thread's stack. Only relevant for multi-threaded BVH traversal. Default: 0",
+                         "0");
+  option_parser_register(opp, "-rt_print_timeline", OPT_BOOL,
+                         &(gpgpu_ctx->device_runtime->g_rt_print_timeline),
+                         "Enable(1) or disable(0) printing rt timeline. Default: 0",
+                         "0");
+  option_parser_register(opp, "-rt_coop_subwarp_config", OPT_INT32,
+                         &(gpgpu_ctx->device_runtime->g_rt_coop_subwarp_config),
+                         "Choose subwarp config for CoopRT. (0) is 32 threads, (1) is 16 threads, (2) is 8 threads, (3) is 4 threads. Default: 0",
+                         "0");
+                                                         
 }
 
 /////////////////////////////////////////////////////////////////////////////
+
+void init_coop_subwarp_configs() {
+  coop_warp_configs.emplace(0,std::map<int,std::vector<int>>{});
+  coop_warp_configs.emplace(1,std::map<int,std::vector<int>>{});
+  coop_warp_configs.emplace(2,std::map<int,std::vector<int>>{});
+  coop_warp_configs.emplace(3,std::map<int,std::vector<int>>{});
+  std::vector<int> tids;
+  for (int i = 0; i < 32; i++) {
+    tids.push_back(i);
+  }  
+  for (int i = 0; i < 32; i++) {
+    coop_warp_configs[0].emplace(i,tids);
+  }
+  tids.clear();
+
+  std::vector<int> tids1;
+  for (int i = 0; i < 16; i++) {
+    tids.push_back(i);
+    tids1.push_back(i+16);
+  }
+  for (int i = 0; i < 16; i++) {
+    coop_warp_configs[1].emplace(i,tids);
+    coop_warp_configs[1].emplace(i+16,tids1);
+  }
+  tids.clear();
+  tids1.clear();
+
+
+  std::vector<int> tids2;
+  std::vector<int> tids3;
+  for (int i = 0; i < 8; i++) {
+    tids.push_back(i);
+    tids1.push_back(i+8);
+    tids2.push_back(i+16);
+    tids3.push_back(i+24);
+  }
+  for (int i = 0; i < 8; i++) {
+    coop_warp_configs[2].emplace(i,tids);
+    coop_warp_configs[2].emplace(i+8,tids1);
+    coop_warp_configs[2].emplace(i+16,tids2);
+    coop_warp_configs[2].emplace(i+24,tids3);
+  }
+  tids.clear();
+  tids1.clear();
+  tids2.clear();
+  tids3.clear();
+
+
+  std::vector<int> tids4;
+  std::vector<int> tids5;
+  std::vector<int> tids6;
+  std::vector<int> tids7;
+  for (int i = 0; i < 4; i++) {
+    tids.push_back(i);
+    tids1.push_back(i+4);
+    tids2.push_back(i+8);
+    tids3.push_back(i+12);
+    tids4.push_back(i+16);
+    tids5.push_back(i+20);
+    tids6.push_back(i+24);
+    tids7.push_back(i+28);
+  }
+  for (int i = 0; i < 4; i++) {
+    coop_warp_configs[3].emplace(i,tids);
+    coop_warp_configs[3].emplace(i+4,tids1);
+    coop_warp_configs[3].emplace(i+8,tids2);
+    coop_warp_configs[3].emplace(i+12,tids3);
+    coop_warp_configs[3].emplace(i+16,tids4);
+    coop_warp_configs[3].emplace(i+20,tids5);
+    coop_warp_configs[3].emplace(i+24,tids6);
+    coop_warp_configs[3].emplace(i+28,tids7);
+  }
+}
 
 void increment_x_then_y_then_z(dim3 &i, const dim3 &bound) {
   i.x++;
@@ -876,6 +994,8 @@ void gpgpu_sim::stop_all_running_kernels() {
 }
 
 void exec_gpgpu_sim::createSIMTCluster() {
+    // Initialize coop subwarp configs
+  init_coop_subwarp_configs();
   m_cluster = new simt_core_cluster *[m_shader_config->n_simt_clusters];
   for (unsigned i = 0; i < m_shader_config->n_simt_clusters; i++)
     m_cluster[i] =
@@ -1326,7 +1446,61 @@ void gpgpu_sim::clear_executed_kernel_info() {
 }
 void gpgpu_sim::gpu_print_stat() {
   FILE *statfout = stdout;
-
+  if(m_config.gpgpu_ctx->device_runtime->g_print_cta_start_finish) {
+    for(auto it: cta_start_finish_cycles)
+      fprintf(statfout,"CTA: %d %lld %lld %d\n",it.first, it.second[0], it.second[1], it.second[2]);
+  }
+  if(m_config.gpgpu_ctx->device_runtime->g_print_rt_start_finish) {
+    for(auto it: rt_start_finish_cycles) {
+      for(int i = 0; i < it.second.size(); i+=2) {
+        fprintf(statfout,"RT: %d %lld %lld ",it.first, it.second[i], it.second[i+1]);
+          for (unsigned i=0; i<warp_statuses; i++) {
+            for (unsigned j=0; j<ray_statuses; j++) {
+              fprintf(statfout, "%d ", rt_warp_latency_dist[it.first][i/2][i*ray_statuses+j]);
+            }
+          }
+        fprintf(statfout,"\n");  
+      }
+    }
+  }
+  if(m_config.gpgpu_ctx->device_runtime->g_print_mem_transactions) {
+    std::ofstream memAccessFile;
+    std::string memAccessFileName;    
+    auto now = std::chrono::system_clock::now();
+    auto UTC = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+    memAccessFileName = "memAccessFile_"+std::to_string(UTC)+".csv";
+    std::cout << "Writing mem access to file " << memAccessFileName << std::endl;
+    memAccessFile.open(memAccessFileName, std::ofstream::out);
+    memAccessFile << "idx,tid,address,size,type,children,thit,eliminator_address\n";
+    int accessIdx = 0;
+    for(auto it: memAccessVector) {
+      memAccessFile << std::dec << accessIdx << "," 
+                  << it.tid << ","
+                  << std::hex << it.address << "," << std::dec << it.size << "," << it.type << ",";
+      for(auto it2: it.child_addresses)
+        if(it2 != nullptr)
+          memAccessFile << std::hex << it2 << ",";
+      memAccessFile << std::dec << "," << it.thit << "," << it.eliminator_address << "\n";
+    }
+    memAccessFile.close();
+  }
+  if(m_config.gpgpu_ctx->device_runtime->g_rt_coop_threads) {
+    std::ofstream rtStatsFile;
+    std::string rtStatsFileName;
+    auto now = std::chrono::system_clock::now();
+    auto UTC = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+    rtStatsFileName = "rtStatsFile_"+std::to_string(UTC)+".csv";
+    std::cout << "Writing rt stats to file " << rtStatsFileName << std::endl;
+    rtStatsFile.open(rtStatsFileName, std::ofstream::out);
+    rtStatsFile << "ctaid,active_count,ray_number,total_nodes,helped_nodes\n";
+    for(auto it: all_rt_stats) {
+      rtStatsFile << std::dec
+                  << it.ctaid << ","
+                  << it.active_threads << "," << it.ray_bounce_number << "," 
+                  << it.total_nodes << "," << it.helped_nodes << std::endl;
+    }
+    rtStatsFile.close();
+  }
   std::string kernel_info_str = executed_kernel_info_string();
   fprintf(statfout, "%s", kernel_info_str.c_str());
 
@@ -1515,12 +1689,18 @@ void gpgpu_sim::gpu_print_stat() {
   fprintf(statfout, "rt_max_tree_depth = %d\n", gpgpu_ctx->func_sim->g_max_tree_depth);
   fprintf(statfout, "rt_max_nodes_per_ray = %d\n", gpgpu_ctx->func_sim->g_max_nodes_per_ray);
   fprintf(statfout, "rt_tot_nodes_per_ray = %d\n", gpgpu_ctx->func_sim->g_tot_nodes_per_ray);
+  fprintf(statfout, "rt_timing_eliminations = %d\n", rt_timing_eliminations);
   fprintf(statfout, "rt_avg_nodes_per_ray = %f\n", (float)gpgpu_ctx->func_sim->g_tot_nodes_per_ray/(gpgpu_ctx->func_sim->g_n_closesthit_rays + gpgpu_ctx->func_sim->g_n_anyhit_rays));
   fprintf(statfout, "g_inst_type_latency = ");
   for (unsigned i=0; i<28; i++) {
     fprintf(statfout, "%lld ", gpgpu_ctx->func_sim->g_inst_type_latency[i]);
   }
   fprintf(statfout, "\n");
+  fprintf(statfout, "g_inst_type_stall = ");
+  for (unsigned i=0; i<28; i++) {
+    fprintf(statfout, "%lld ", g_inst_type_stall[i]);
+  }
+  fprintf(statfout, "\n");  
   fprintf(statfout, "inst_class_by_shader\n");
   for (unsigned i=0; i<16; i++) {
     fprintf(statfout, "%d:", i);

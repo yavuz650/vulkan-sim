@@ -30,6 +30,7 @@
 #include "../cuda-sim/ptx_sim.h"
 #include "shader.h"
 #include "shader_trace.h"
+unsigned long long g_inst_type_stall[28] = {0};
 
 // Constructor
 Scoreboard::Scoreboard(unsigned sid, unsigned n_warps, class gpgpu_t* gpu)
@@ -38,6 +39,7 @@ Scoreboard::Scoreboard(unsigned sid, unsigned n_warps, class gpgpu_t* gpu)
   // Initialize size of table
   reg_table.resize(n_warps);
   longopregs.resize(n_warps);
+  owner_inst_type.resize(n_warps);
 
   m_gpu = gpu;
 }
@@ -55,7 +57,7 @@ void Scoreboard::printContents() const {
   }
 }
 
-void Scoreboard::reserveRegister(unsigned wid, unsigned regnum) {
+void Scoreboard::reserveRegister(unsigned wid, unsigned regnum, op_type op) {
   if (!(reg_table[wid].find(regnum) == reg_table[wid].end())) {
     printf(
         "Error: trying to reserve an already reserved register (sid=%d, "
@@ -66,6 +68,8 @@ void Scoreboard::reserveRegister(unsigned wid, unsigned regnum) {
   SHADER_DPRINTF(SCOREBOARD, "Reserved Register - warp:%d, reg: %d\n", wid,
                  regnum);
   reg_table[wid].insert(regnum);
+  assert(owner_inst_type[wid].find(regnum) == owner_inst_type[wid].end());
+  owner_inst_type[wid].emplace(regnum,op);  
 }
 
 // Unmark register as write-pending
@@ -74,6 +78,8 @@ void Scoreboard::releaseRegister(unsigned wid, unsigned regnum) {
   SHADER_DPRINTF(SCOREBOARD, "Release register - warp:%d, reg: %d\n", wid,
                  regnum);
   reg_table[wid].erase(regnum);
+  assert(owner_inst_type[wid].find(regnum) != owner_inst_type[wid].end());
+  owner_inst_type[wid].erase(regnum);  
 }
 
 const bool Scoreboard::islongop(unsigned warp_id, unsigned regnum) {
@@ -83,7 +89,7 @@ const bool Scoreboard::islongop(unsigned warp_id, unsigned regnum) {
 void Scoreboard::reserveRegisters(const class warp_inst_t* inst) {
   for (unsigned r = 0; r < MAX_OUTPUT_VALUES; r++) {
     if (inst->out[r] > 0) {
-      reserveRegister(inst->warp_id(), inst->out[r]);
+      reserveRegister(inst->warp_id(), inst->out[r], inst->op);
       SHADER_DPRINTF(SCOREBOARD, "Reserved register - warp:%d, reg: %d\n",
                      inst->warp_id(), inst->out[r]);
     }
@@ -125,7 +131,7 @@ void Scoreboard::releaseRegisters(const class warp_inst_t* inst) {
  * @return
  * true if WAW or RAW hazard (no WAR since in-order issue)
  **/
-bool Scoreboard::checkCollision(unsigned wid, const class inst_t* inst) const {
+bool Scoreboard::checkCollision(unsigned wid, const class inst_t* inst) {
   // Get list of all input and output registers
   std::set<int> inst_regs;
 
@@ -144,6 +150,7 @@ bool Scoreboard::checkCollision(unsigned wid, const class inst_t* inst) const {
   std::set<int>::const_iterator it2;
   for (it2 = inst_regs.begin(); it2 != inst_regs.end(); it2++)
     if (reg_table[wid].find(*it2) != reg_table[wid].end()) {
+      g_inst_type_stall[owner_inst_type[wid][*it2]]++;
       return true;
     }
   return false;

@@ -45,13 +45,13 @@ class Scoreboard {
   void releaseRegisters(const warp_inst_t *inst);
   void releaseRegister(unsigned wid, unsigned regnum);
 
-  bool checkCollision(unsigned wid, const inst_t *inst) const;
+  bool checkCollision(unsigned wid, const inst_t *inst);
   bool pendingWrites(unsigned wid) const;
   void printContents() const;
   const bool islongop(unsigned warp_id, unsigned regnum);
 
  private:
-  void reserveRegister(unsigned wid, unsigned regnum);
+  void reserveRegister(unsigned wid, unsigned regnum, op_type op);
   int get_sid() const { return m_sid; }
 
   unsigned m_sid;
@@ -61,6 +61,8 @@ class Scoreboard {
   std::vector<std::set<unsigned> > reg_table;
   // Register that depend on a long operation (global, local or tex memory)
   std::vector<std::set<unsigned> > longopregs;
+  // What type of instruction reserved this register?
+  std::vector<std::map<unsigned,unsigned> > owner_inst_type;
 
   class gpgpu_t *m_gpu;
 };
