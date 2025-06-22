@@ -1,3 +1,13 @@
+# CoopRT
+This repo has the source code of ISCA2025 paper [CoopRT: Accelerating BVH Traversal for Ray Tracing via Cooperative Threads](https://dl.acm.org/doi/10.1145/3695053.3731118).
+Following new config options are added to Vulkan-sim
+- `rt_coop_threads` Enables CoopRT when set to (1), default: 0
+- `rt_coop_push_to_own_stack` Helper threads push nodes to their own stacks. Should be enabled(1) with CoopRT. Default: 0
+- `rt_coop_subwarp_config` Change the subwarp config. 0: 32 threads in subwarp, 1: 16 threads, 2: 8 threads, 3: 4 threads.
+
+If you want to enable CoopRT, you just need to set `rt_coop_threads` and `rt_coop_push_to_own_stack` to 1.
+You can find other miscallenous options for profiling in the newly added config file.
+
 #  Introduction   
 Welcome to Vulkan-Sim, a cycle level GPU simulator for Vulkan ray tracing workloads. Vulkan-Sim models a modern GPU architecture with a baseline RT unit architecture of our own based on past literature such as Intersection Prediction for Accelerated GPU Ray Tracing by Liu et al. from MICRO 2021.
 
