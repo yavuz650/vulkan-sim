@@ -214,6 +214,73 @@ float3 calculate_idir(float3 direction) {
     return idir;
 }
 
+static std::mutex file_mutex;
+
+void write_triangle_test_to_csv(const std::string& filename, 
+                               float3 p0, float3 p1, float3 p2, 
+                               Ray ray_properties, 
+                               float thit, bool hit) {
+    std::lock_guard<std::mutex> lock(file_mutex); // Only needed if multi-threaded
+    
+    std::ofstream out(filename, std::ios::app); // Append mode
+    
+    // Write headers only if file is empty
+    if (out.tellp() == 0) {
+        out << "ray_origin_x,ray_origin_y,ray_origin_z,"
+            << "ray_direction_x,ray_direction_y,ray_direction_z,"
+            << "tmin,tmax,"
+            << "tri_p0_x,tri_p0_y,tri_p0_z,"
+            << "tri_p1_x,tri_p1_y,tri_p1_z,"
+            << "tri_p2_x,tri_p2_y,tri_p2_z,"
+            << "thit,hit\n";
+    }
+    
+    // Write data
+    out << ray_properties.get_origin().x << ","
+        << ray_properties.get_origin().y << ","
+        << ray_properties.get_origin().z << ","
+        << ray_properties.get_direction().x << ","
+        << ray_properties.get_direction().y << ","
+        << ray_properties.get_direction().z << ","
+        << ray_properties.get_tmin() << ","
+        << ray_properties.get_tmax() << ","
+        << p0.x << "," << p0.y << "," << p0.z << ","
+        << p1.x << "," << p1.y << "," << p1.z << ","
+        << p2.x << "," << p2.y << "," << p2.z << ","
+        << thit << ","
+        << (hit ? "1" : "0") << "\n";
+}
+
+void write_box_test_to_csv(const std::string& filename,
+                           float3 low, float3 high,
+                           float3 idirection, float3 origin,
+                           float tmin, float tmax,
+                           float thit, bool hit) {
+    std::lock_guard<std::mutex> lock(file_mutex);
+    
+    std::ofstream out(filename, std::ios::app);
+    
+    if (out.tellp() == 0) {
+        out << "ray_origin_x,ray_origin_y,ray_origin_z,"
+            << "ray_direction_x,ray_direction_y,ray_direction_z,"
+            << "tmin,tmax,"
+            << "box_low_x,box_low_y,box_low_z,"
+            << "box_high_x,box_high_y,box_high_z,"
+            << "thit,hit\n";
+    }
+    
+    float3 direction{1.0f / idirection.x, 1.0f / idirection.y, 1.0f / idirection.z};
+    
+    // CORRECTED LINE: Removed the extra << before high.z
+    out << origin.x << "," << origin.y << "," << origin.z << ","
+        << direction.x << "," << direction.y << "," << direction.z << ","
+        << tmin << "," << tmax << ","
+        << low.x << "," << low.y << "," << low.z << ","
+        << high.x << "," << high.y << "," << high.z << ","
+        << thit << ","
+        << (hit ? "1" : "0") << "\n";
+}
+
 bool ray_box_test(float3 low, float3 high, float3 idirection, float3 origin, float tmin, float tmax, float& thit)
 {
 	// const float3 lo = Low * InvDir - Ood;
@@ -231,9 +298,12 @@ bool ray_box_test(float3 low, float3 high, float3 idirection, float3 origin, flo
 
 	// OutIntersectionDist = slabMin;
     thit = min;
+    bool hit = (min <= max);
+
+    //write_box_test_to_csv("ray_box_tests.csv", low, high, idirection, origin, tmin, tmax, thit, hit);
 
 	// return slabMin <= slabMax;
-    return (min <= max);
+    return hit;
 }
 
 typedef struct StackEntry {
@@ -576,6 +646,8 @@ void generate_prefetches(std::list<StackEntry> &stack, std::vector<MemoryTransac
                         transactions.push_back(MemoryTransactionRecord(device_prefetch_addr, GEN_RT_BVH_INSTANCE_LEAF_length * 4, TransactionType::BVH_INSTANCE_LEAF, true));
                     }
                     // BLAS LEAF - BVH_PRIMITIVE_LEAF_DESCRIPTOR
+
+                    // (anshul) Comment this if you want to skip BLAS leaf nodes from prefetching (because of low data reuse)
                     else if (prefetch_topLevel == false && prefetch_leaf == true)
                     {
                         transactions.push_back(MemoryTransactionRecord(device_prefetch_addr, GEN_RT_BVH_INTERNAL_NODE_length * 4, TransactionType::BVH_PRIMITIVE_LEAF_DESCRIPTOR, true));
@@ -2288,14 +2360,21 @@ bool VulkanRayTracing::mt_ray_triangle_test(float3 p0, float3 p1, float3 p2, Ray
     float3 tvec = ray_properties.get_origin() - p0;
     float u = dot(tvec, pvec) * idet;
 
-    if (u < 0 || u > 1) return false;
+    if (u < 0 || u > 1) {
+        //write_triangle_test_to_csv("ray_triangle_tests.csv", p0, p1, p2, ray_properties, 0.0f, false);
+        return false;
+    }
 
     float3 qvec = cross(tvec, v0v1);
     float v = dot(ray_properties.get_direction(), qvec) * idet;
 
-    if (v < 0 || (u + v) > 1) return false;
+    if (v < 0 || (u + v) > 1) {
+        //write_triangle_test_to_csv("ray_triangle_tests.csv", p0, p1, p2, ray_properties, 0.0f, false);
+        return false;
+    }
 
     *thit = dot(v0v2, qvec) * idet;
+    //write_triangle_test_to_csv("ray_triangle_tests.csv", p0, p1, p2, ray_properties, *thit, true);
     return true;
 }
 

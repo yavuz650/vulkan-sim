@@ -935,7 +935,8 @@ void warp_inst_t::set_rt_mem_transactions(unsigned int tid, std::vector<MemoryTr
       (new_addr_type)it->address,
       it->size,
       it->type,
-      it->is_prefetch_load
+      it->is_prefetch_load,
+      it->is_BLAS
     );
     if (!it->is_prefetch_load) { m_per_scalar_thread[tid].RT_mem_accesses.push_back(mem_record); }
     // Prefetcher Addition //
@@ -1079,6 +1080,8 @@ void warp_inst_t::update_next_rt_accesses(std::deque<std::pair<new_addr_type, ne
             if (next_access.size > 32) {
               // Create the memory chunks and push to prefetch_mem_access_q
               for (unsigned j=1; j<((next_access.size+31)/32); j++) {
+                // (anshul) Uncomment below if you want to prefetch only the BLAS part of the BVH tree
+                //if (m_config->prefetch_only_BLAS && next_access.is_BLAS)
                 prefetch_mem_access_q.push_back(std::make_pair((new_addr_type)(next_access.address + (j * 32)), (new_addr_type)next_access.address));
               }
             }

@@ -264,6 +264,7 @@ typedef struct MemoryTransactionRecord {
     uint32_t size;
     TransactionType type;
     bool is_prefetch_load;
+    bool is_BLAS;
 } MemoryTransactionRecord;
 
 typedef struct MemoryStoreTransactionRecord {
@@ -535,6 +536,7 @@ class core_config {
 
   bool m_valid;
   unsigned warp_size;
+  bool prefetch_only_BLAS;
   // backward pointer
   class gpgpu_context *gpgpu_ctx;
 
@@ -1246,13 +1248,14 @@ typedef struct RTMemoryTransactionRecord {
     uint32_t size;
     TransactionType type;
     bool is_prefetch_load;
+    bool is_BLAS;
     std::bitset<4> mem_chunks;
     RTMemStatus status;
     RTMemoryTransactionRecord() {
       status = RT_MEM_UNMARKED;
     }
-    RTMemoryTransactionRecord(new_addr_type address, uint32_t size, TransactionType type, bool is_prefetch_load=false)
-    : address(address), size(size), type(type), is_prefetch_load(is_prefetch_load) {
+    RTMemoryTransactionRecord(new_addr_type address, uint32_t size, TransactionType type, bool is_prefetch_load=false, bool is_BLAS=false)
+    : address(address), size(size), type(type), is_prefetch_load(is_prefetch_load), is_BLAS(is_BLAS) {
       // Break into 32B chunks
       mem_chunks.reset();
       for (unsigned i=0; i<(size + 31)/32; i++) {

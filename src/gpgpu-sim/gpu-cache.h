@@ -75,6 +75,7 @@ struct evicted_block_info {
   unsigned m_modified_size;
   // Prefetcher Addition //
   bool    m_prefetched;
+  bool    m_BLAS;
   bool    m_accessed;
 
   evicted_block_info() {
@@ -82,6 +83,7 @@ struct evicted_block_info {
     m_modified_size = 0;
     // Prefetcher Addition //
     m_prefetched=false;
+    m_BLAS=false;
     m_accessed=false;
   }
   void set_info(new_addr_type block_addr, unsigned modified_size) {
@@ -89,6 +91,7 @@ struct evicted_block_info {
     m_modified_size = modified_size;
     // Prefetcher Addition //
     m_prefetched=false;
+    m_BLAS=false;
     m_accessed=false;
   }
 };
@@ -117,6 +120,7 @@ struct cache_block_t {
     m_block_addr = 0;
     // Prefetcher Addition //
     m_prefetched=false;
+    m_BLAS=false;
     m_accessed=false;
   }
 
@@ -155,6 +159,7 @@ struct cache_block_t {
 
   // Prefetcher Addition //
   bool    m_prefetched;
+  bool    m_BLAS;
   bool    m_accessed;
 };
 

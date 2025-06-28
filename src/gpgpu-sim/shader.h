@@ -1292,8 +1292,8 @@ class rt_unit : public pipelined_simd_unit {
                 const shader_core_config *config,
                 shader_core_stats *stats,
                 unsigned sid, unsigned tpc);
-        ~rt_unit() { if(cacheAccesFile.is_open()) {
-                        cacheAccesFile.close(); 
+        ~rt_unit() { if(cacheAccessFile.is_open()) {
+                        cacheAccessFile.close(); 
                       }
                     }
                 
@@ -1319,7 +1319,7 @@ class rt_unit : public pipelined_simd_unit {
         std::deque<std::pair<new_addr_type, new_addr_type>> prefetch_mem_access_q; // chunk addr, base addr
         
     protected:
-      static std::ofstream cacheAccesFile;
+      static std::ofstream cacheAccessFile;
       static std::string cacheAccessFileName;
       static int cacheAccessIdx;
       void process_memory_response(mem_fetch* mf, warp_inst_t &pipe_reg);
@@ -1804,6 +1804,7 @@ class shader_core_config : public core_config {
   bool bypassL0Complet;
   bool bypassL1forPrefetches;
   bool bypassL1forNonRTloads;
+  bool prefetch_only_BLAS;
   unsigned m_rt_intersection_table_type;
 };
 

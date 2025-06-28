@@ -1402,6 +1402,7 @@ enum cache_request_status data_cache::wr_miss_wa_naive(
           evicted.m_block_addr, m_wrbk_type, evicted.m_modified_size, true,
           m_gpu->gpu_tot_sim_cycle + m_gpu->gpu_sim_cycle);
       if (evicted.m_prefetched) { wb->set_prefetch_flag(); }
+      if (evicted.m_BLAS) { wb->set_BLAS_flag(); }
       // the evicted block may have wrong chip id when advanced L2 hashing  is
       // used, so set the right chip address from the original mf
       wb->set_chip(mf->get_tlx_addr().chip);

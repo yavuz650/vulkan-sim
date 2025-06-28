@@ -2814,9 +2814,10 @@ void pipelined_simd_unit::issue(register_set &source_reg) {
     }
 */
 
-std::ofstream rt_unit::cacheAccesFile;
+std::ofstream rt_unit::cacheAccessFile;
 std::string rt_unit::cacheAccessFileName;
 int rt_unit::cacheAccessIdx = 0;
+bool dump_cacheAccess = false;
 rt_unit::rt_unit(mem_fetch_interface *icnt,
                      shader_core_mem_fetch_allocator *mf_allocator,
                      shader_core_ctx *core,
@@ -3596,21 +3597,23 @@ void rt_unit::process_cache_access(baseline_cache *cache, warp_inst_t &inst, mem
     
   else {
     RT_DPRINTF("Shader %d: Sending cache request for 0x%x\n", m_sid, mf->get_uncoalesced_addr());
-    if(!cacheAccesFile.is_open()) {
-        std::time_t raw_time = std::time(0);
-        struct tm *time_info;
-        char time_buf[30];
-        time_info = localtime(&raw_time);
-        strftime(time_buf, sizeof(time_buf), "%d-%m-%Y-%H-%M-%S", time_info);
-        std::string time_offset(time_buf);
-        cacheAccessFileName = "cacheAccessFile_"+time_offset+".csv";
-        std::cout << "Writing cache access to file " << cacheAccessFileName << std::endl;
-        cacheAccesFile.open(cacheAccessFileName,std::ofstream::out);
-        cacheAccesFile << "idx,smid,kernel_ctaid,dynamic_warpid,address,cycle\n";
+    if (dump_cacheAccess) {
+      if(!cacheAccessFile.is_open()) {
+          std::time_t raw_time = std::time(0);
+          struct tm *time_info;
+          char time_buf[30];
+          time_info = localtime(&raw_time);
+          strftime(time_buf, sizeof(time_buf), "%d-%m-%Y-%H-%M-%S", time_info);
+          std::string time_offset(time_buf);
+          cacheAccessFileName = "cacheAccessFile_"+time_offset+".csv";
+          std::cout << "Writing cache access to file " << cacheAccessFileName << std::endl;
+          cacheAccessFile.open(cacheAccessFileName,std::ofstream::out);
+          cacheAccessFile << "idx,smid,kernel_ctaid,dynamic_warpid,address,cycle\n";
+      }
+      cacheAccessFile << cacheAccessIdx << "," << m_sid << "," << m_core->get_shd_warps()[inst.get_warp_id()]->get_kernel_cta_id() << "," << inst.dynamic_warp_id() << "," << std::hex << mf->get_addr() << "," << std::dec 
+                    << m_core->get_gpu()->gpu_sim_cycle + m_core->get_gpu()->gpu_tot_sim_cycle << "\n";
+      cacheAccessIdx++;
     }
-    cacheAccesFile << cacheAccessIdx << "," << m_sid << "," << m_core->get_shd_warps()[inst.get_warp_id()]->get_kernel_cta_id() << "," << inst.dynamic_warp_id() << "," << std::hex << mf->get_addr() << "," << std::dec 
-                   << m_core->get_gpu()->gpu_sim_cycle + m_core->get_gpu()->gpu_tot_sim_cycle << "\n";
-    cacheAccessIdx++;
 
     m_stats->rt_mem_requests++;
 

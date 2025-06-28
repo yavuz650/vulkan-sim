@@ -135,6 +135,9 @@ class mem_fetch {
   void set_prefetch_flag() { m_prefetched=true; }
   bool is_prefetched() { return m_prefetched; }
 
+  void set_BLAS_flag() { m_BLAS=true; }
+  bool is_BLAS() { return m_BLAS; }
+
   mem_fetch *get_original_mf() { return original_mf; }
   mem_fetch *get_original_wr_mf() { return original_wr_mf; }
 
@@ -182,6 +185,7 @@ class mem_fetch {
 
   // Prefetcher Addition //
   bool m_prefetched;
+  bool m_BLAS;
 
   mem_fetch
       *original_mf;  // this pointer is set up when a request is divided into
