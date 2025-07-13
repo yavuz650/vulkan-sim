@@ -1079,7 +1079,7 @@ void warp_inst_t::update_next_rt_accesses(std::deque<std::pair<new_addr_type, ne
             // If the size (of prefetch) is larger than 32B, then split into chunks and add chunks into prefetch_mem_access_q
             if (next_access.size > 32) {
               // Create the memory chunks and push to prefetch_mem_access_q
-              for (unsigned j=1; j<((next_access.size+31)/32); j++) {
+              for (unsigned j=0; j<((next_access.size+31)/32); j++) {
                 // (anshul) Uncomment below if you want to prefetch only the BLAS part of the BVH tree
                 //if (m_config->prefetch_only_BLAS && next_access.is_BLAS)
                 prefetch_mem_access_q.push_back(std::make_pair((new_addr_type)(next_access.address + (j * 32)), (new_addr_type)next_access.address));
@@ -1185,7 +1185,8 @@ bool warp_inst_t::process_returned_mem_access(bool &mem_record_done, unsigned ti
       if (mem_record.mem_chunks.none()) {
         // Set up delay of next intersection test
         unsigned n_delay_cycles = m_config->m_rt_intersection_latency.at(mem_record.type);
-        m_per_scalar_thread[tid].intersection_delay += n_delay_cycles;
+        if(!mem_record.is_prefetch_load)
+          m_per_scalar_thread[tid].intersection_delay += n_delay_cycles;
         
         RT_DPRINTF("Thread %d collected all chunks for address 0x%x (size %d)\n", tid, mem_record.address, mem_record.size);
         RT_DPRINTF("Processing data of transaction type %d for %d cycles.\n", mem_record.type, n_delay_cycles);
