@@ -1,19 +1,20 @@
-// Copyright (c) 2009-2011, Tor M. Aamodt, Wilson W.L. Fung, George L. Yuan,
-// Ali Bakhoda, Andrew Turner, Ivan Sham
-// The University of British Columbia
+// Copyright (c) 2009-2021, Tor M. Aamodt, Wilson W.L. Fung, George L. Yuan,
+// Ali Bakhoda, Andrew Turner, Ivan Sham, Vijay Kandiah, Nikos Hardavellas
+// The University of British Columbia, Northwestern University
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
 //
-// Redistributions of source code must retain the above copyright notice, this
-// list of conditions and the following disclaimer.
-// Redistributions in binary form must reproduce the above copyright notice,
-// this list of conditions and the following disclaimer in the documentation
-// and/or other materials provided with the distribution. Neither the name of
-// The University of British Columbia nor the names of its contributors may be
-// used to endorse or promote products derived from this software without
-// specific prior written permission.
+// 1. Redistributions of source code must retain the above copyright notice, this
+//    list of conditions and the following disclaimer;
+// 2. Redistributions in binary form must reproduce the above copyright notice,
+//    this list of conditions and the following disclaimer in the documentation
+//    and/or other materials provided with the distribution;
+// 3. Neither the names of The University of British Columbia, Northwestern 
+//    University nor the names of their contributors may be used to
+//    endorse or promote products derived from this software without specific
+//    prior written permission.
 //
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
 // AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -65,6 +66,7 @@
 #include "power_stat.h"
 #include "stats.h"
 #include "visualizer.h"
+#include "../cuda-sim/vulkan_ray_tracing.h"
 
 #ifdef GPGPUSIM_POWER_MODEL
 #include "power_interface.h"
@@ -77,10 +79,6 @@ class gpgpu_sim_wrapper {};
 #include <iostream>
 #include <sstream>
 #include <string>
-//begin cycle, end cycle, smid
-std::map<int,std::array<int,3>> cta_start_finish_cycles;
-int rt_timing_eliminations=0;
-std::map <int,std::map<int,std::vector<int>>> coop_warp_configs;
 
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 
@@ -99,10 +97,11 @@ tr1_hash_map<new_addr_type, unsigned> address_random_interleaving;
 
 #include "mem_latency_stat.h"
 
+
 void power_config::reg_options(class OptionParser *opp) {
-  option_parser_register(opp, "-gpuwattch_xml_file", OPT_CSTR,
-                         &g_power_config_name, "GPUWattch XML file",
-                         "gpuwattch.xml");
+  option_parser_register(opp, "-accelwattch_xml_file", OPT_CSTR,
+                         &g_power_config_name, "AccelWattch XML file",
+                         "accelwattch_sass_sim.xml");
 
   option_parser_register(opp, "-power_simulation_enabled", OPT_BOOL,
                          &g_power_simulation_enabled,
@@ -111,6 +110,92 @@ void power_config::reg_options(class OptionParser *opp) {
   option_parser_register(opp, "-power_per_cycle_dump", OPT_BOOL,
                          &g_power_per_cycle_dump,
                          "Dump detailed power output each cycle", "0");
+
+
+
+
+  option_parser_register(opp, "-hw_perf_file_name", OPT_CSTR,
+                         &g_hw_perf_file_name, "Hardware Performance Statistics file",
+                         "hw_perf.csv");
+
+  option_parser_register(opp, "-hw_perf_bench_name", OPT_CSTR,
+                         &g_hw_perf_bench_name, "Kernel Name in Hardware Performance Statistics file",
+                         "");
+
+  option_parser_register(opp, "-power_simulation_mode", OPT_INT32,
+                         &g_power_simulation_mode,
+                         "Switch performance counter input for power simulation (0=Sim, 1=HW, 2=HW-Sim Hybrid)", "0");
+
+  option_parser_register(opp, "-dvfs_enabled", OPT_BOOL,
+                         &g_dvfs_enabled,
+                         "Turn on DVFS for power model", "0");
+  option_parser_register(opp, "-aggregate_power_stats", OPT_BOOL,
+                         &g_aggregate_power_stats,
+                         "Accumulate power across all kernels", "0");
+
+  //Accelwattch Hyrbid Configuration
+
+  option_parser_register(opp, "-accelwattch_hybrid_perfsim_L1_RH", OPT_BOOL,
+                         &accelwattch_hybrid_configuration[HW_L1_RH],
+                         "Get L1 Read Hits for Accelwattch-Hybrid from Accel-Sim", "0");
+  option_parser_register(opp, "-accelwattch_hybrid_perfsim_L1_RM", OPT_BOOL,
+                         &accelwattch_hybrid_configuration[HW_L1_RM],
+                         "Get L1 Read Misses for Accelwattch-Hybrid from Accel-Sim", "0");
+  option_parser_register(opp, "-accelwattch_hybrid_perfsim_L1_WH", OPT_BOOL,
+                         &accelwattch_hybrid_configuration[HW_L1_WH],
+                         "Get L1 Write Hits for Accelwattch-Hybrid from Accel-Sim", "0");
+  option_parser_register(opp, "-accelwattch_hybrid_perfsim_L1_WM", OPT_BOOL,
+                         &accelwattch_hybrid_configuration[HW_L1_WM],
+                         "Get L1 Write Misses for Accelwattch-Hybrid from Accel-Sim", "0");
+
+  option_parser_register(opp, "-accelwattch_hybrid_perfsim_L2_RH", OPT_BOOL,
+                         &accelwattch_hybrid_configuration[HW_L2_RH],
+                         "Get L2 Read Hits for Accelwattch-Hybrid from Accel-Sim", "0");
+  option_parser_register(opp, "-accelwattch_hybrid_perfsim_L2_RM", OPT_BOOL,
+                         &accelwattch_hybrid_configuration[HW_L2_RM],
+                         "Get L2 Read Misses for Accelwattch-Hybrid from Accel-Sim", "0");
+  option_parser_register(opp, "-accelwattch_hybrid_perfsim_L2_WH", OPT_BOOL,
+                         &accelwattch_hybrid_configuration[HW_L2_WH],
+                         "Get L2 Write Hits for Accelwattch-Hybrid from Accel-Sim", "0");
+  option_parser_register(opp, "-accelwattch_hybrid_perfsim_L2_WM", OPT_BOOL,
+                         &accelwattch_hybrid_configuration[HW_L2_WM],
+                         "Get L2 Write Misses for Accelwattch-Hybrid from Accel-Sim", "0");
+
+  option_parser_register(opp, "-accelwattch_hybrid_perfsim_CC_ACC", OPT_BOOL,
+                         &accelwattch_hybrid_configuration[HW_CC_ACC],
+                         "Get Constant Cache Acesses for Accelwattch-Hybrid from Accel-Sim", "0");
+
+  option_parser_register(opp, "-accelwattch_hybrid_perfsim_SHARED_ACC", OPT_BOOL,
+                         &accelwattch_hybrid_configuration[HW_SHRD_ACC],
+                         "Get Shared Memory Acesses for Accelwattch-Hybrid from Accel-Sim", "0");
+
+  option_parser_register(opp, "-accelwattch_hybrid_perfsim_DRAM_RD", OPT_BOOL,
+                         &accelwattch_hybrid_configuration[HW_DRAM_RD],
+                         "Get DRAM Reads for Accelwattch-Hybrid from Accel-Sim", "0");
+  option_parser_register(opp, "-accelwattch_hybrid_perfsim_DRAM_WR", OPT_BOOL,
+                         &accelwattch_hybrid_configuration[HW_DRAM_WR],
+                         "Get DRAM Writes for Accelwattch-Hybrid from Accel-Sim", "0");
+
+  option_parser_register(opp, "-accelwattch_hybrid_perfsim_NOC", OPT_BOOL,
+                         &accelwattch_hybrid_configuration[HW_NOC],
+                         "Get Interconnect Acesses for Accelwattch-Hybrid from Accel-Sim", "0");
+
+  option_parser_register(opp, "-accelwattch_hybrid_perfsim_PIPE_DUTY", OPT_BOOL,
+                         &accelwattch_hybrid_configuration[HW_PIPE_DUTY],
+                         "Get Pipeline Duty Cycle Acesses for Accelwattch-Hybrid from Accel-Sim", "0");
+
+  option_parser_register(opp, "-accelwattch_hybrid_perfsim_NUM_SM_IDLE", OPT_BOOL,
+                         &accelwattch_hybrid_configuration[HW_NUM_SM_IDLE],
+                         "Get Number of Idle SMs for Accelwattch-Hybrid from Accel-Sim", "0");
+
+  option_parser_register(opp, "-accelwattch_hybrid_perfsim_CYCLES", OPT_BOOL,
+                         &accelwattch_hybrid_configuration[HW_CYCLES],
+                         "Get Executed Cycles for Accelwattch-Hybrid from Accel-Sim", "0");
+
+  option_parser_register(opp, "-accelwattch_hybrid_perfsim_VOLTAGE", OPT_BOOL,
+                         &accelwattch_hybrid_configuration[HW_VOLTAGE],
+                         "Get Chip Voltage for Accelwattch-Hybrid from Accel-Sim", "0");
+
 
   // Output Data Formats
   option_parser_register(
@@ -297,6 +382,90 @@ void shader_core_config::reg_options(class OptionParser *opp) {
       opp, "-gpgpu_rt_intersection_table_type", OPT_UINT32, &m_rt_intersection_table_type,
       "type of intersection table",
       "0");
+  option_parser_register(
+      opp, "-keep_accepting_warps", OPT_BOOL, &m_keep_accepting_warps,
+      "keep accepting new warps, no queue",
+      "0");
+  option_parser_register(
+      opp, "-pipelined_treelet_queue", OPT_BOOL, &m_pipelined_treelet_queue,
+      "queue up RT unit warps in pipelined fashion until a certain amount",
+      "0");
+  option_parser_register(
+      opp, "-treelet_queue", OPT_BOOL, &m_treelet_queue,
+      "queue up RT unit warps until a certain amount",
+      "0");
+  option_parser_register(
+      opp, "-treelet_queue_wait_cycle", OPT_UINT32, &m_treelet_queue_wait_cycle,
+      "type of intersection table",
+      "5000");
+  option_parser_register(
+      opp, "-treelet_prefetch", OPT_BOOL, &m_treelet_prefetch,
+      "prefetch treelets in process_memory_access_queue by populating the access q with treelet mfs",
+      "0");
+  option_parser_register(
+      opp, "-treelet_prefetch_heuristic", OPT_UINT32, &m_treelet_prefetch_heuristic,
+      "treelet_prefetch_heuristic",
+      "0");
+  option_parser_register(
+      opp, "-treelet_prefetch_threshold", OPT_DOUBLE, &m_treelet_prefetch_threshold,
+      "treelet_prefetch_threshold for treelet_prefetch_heuristic 1",
+      "0.5");
+  option_parser_register(
+      opp, "-flush_prefetch_queue_on_new_treelet", OPT_BOOL, &m_flush_prefetch_queue_on_new_treelet,
+      "flush prefetch queue when theres a new most popular treelet",
+      "0");
+  option_parser_register(
+      opp, "-prefetch_next_treelet_when_queue_empty", OPT_BOOL, &prefetch_next_treelet_when_queue_empty,
+      "prefetch the next treelet when the prefetch queue is empty",
+      "0");
+  option_parser_register(
+      opp, "-prioritize_prefetches", OPT_BOOL, &prioritize_prefetches,
+      "prioritizes the prefetch queue instead of the mem access q or store q",
+      "0");
+  option_parser_register(
+      opp, "-max_prefetch_queue_size", OPT_UINT32, &m_max_prefetch_queue_size,
+      "max_prefetch_queue_size",
+      "500");
+  option_parser_register(
+      opp, "-treelet_sort", OPT_UINT32, &m_treelet_sort,
+      "sort threads in treelet order",
+      "0");
+  option_parser_register(
+      opp, "-sort_method", OPT_UINT32, &m_sort_method,
+      "sort method, 0 is strictly following treelet order, 1 is loosely following treelet order",
+      "0");
+  option_parser_register(
+      opp, "-treelet_scheduler", OPT_UINT32, &m_treelet_scheduler,
+      "overrides the default rt unit scheduler with a treelet scheduler",
+      "0");
+  option_parser_register(
+      opp, "-m_lee_micro_prefetcher", OPT_BOOL, &m_lee_micro_prefetcher,
+      "micro2010 lee prefetcher impl",
+      "0");
+  option_parser_register(
+      opp, "-load_treelet_metadata", OPT_BOOL, &load_treelet_metadata,
+      "load_treelet_metadata",
+      "0");
+  option_parser_register(
+      opp, "-wait_for_metadata_load", OPT_BOOL, &wait_for_metadata_load,
+      "strictly wait_for_metadata_load",
+      "0");
+  option_parser_register(
+      opp, "-early_metadata_load", OPT_BOOL, &early_metadata_load,
+      "fetch metadata earlier",
+      "0");
+  option_parser_register(
+      opp, "-remap_to_treelet_layout", OPT_BOOL, &remap_to_treelet_layout,
+      "remap_to_treelet_layout. make sure to turn all metadata options off",
+      "0");
+  option_parser_register(
+      opp, "-treelet_remap_stride", OPT_UINT32, &treelet_remap_stride,
+      "separates the treelet nodes by a stride to for load balancing according to the DRAM partition stride",
+      "0");
+  option_parser_register(
+      opp, "-prefetch_delay", OPT_UINT32, &prefetch_delay,
+      "prefetch_delay",
+      "32");
   option_parser_register(opp, "-gpgpu_cache:il1", OPT_CSTR,
                          &m_L1I_config.m_config_string,
                          "shader L1 instruction cache config "
@@ -309,6 +478,8 @@ void shader_core_config::reg_options(class OptionParser *opp) {
                          " {<nsets>:<bsize>:<assoc>,<rep>:<wr>:<alloc>:<wr_"
                          "alloc>,<mshr>:<N>:<merge>,<mq> | none}",
                          "none");
+  option_parser_register(opp, "-gpgpu_l1_cache_write_ratio", OPT_UINT32,
+                         &m_L1D_config.m_wr_percent, "L1D write ratio", "0");
   option_parser_register(opp, "-gpgpu_l1_banks", OPT_UINT32,
                          &m_L1D_config.l1_banks, "The number of L1 cache banks",
                          "1");
@@ -386,7 +557,14 @@ void shader_core_config::reg_options(class OptionParser *opp) {
   option_parser_register(
       opp, "-gpgpu_shmem_size", OPT_UINT32, &gpgpu_shmem_size,
       "Size of shared memory per shader core (default 16kB)", "16384");
-  option_parser_register(opp, "-gpgpu_adaptive_cache_config", OPT_UINT32,
+  option_parser_register(opp, "-gpgpu_shmem_option", OPT_CSTR,
+                         &gpgpu_shmem_option,
+                         "Option list of shared memory sizes", "0");
+  option_parser_register(
+      opp, "-gpgpu_unified_l1d_size", OPT_UINT32,
+      &m_L1D_config.m_unified_cache_size,
+      "Size of unified data cache(L1D + shared memory) in KB", "0");
+  option_parser_register(opp, "-gpgpu_adaptive_cache_config", OPT_BOOL,
                          &adaptive_cache_config, "adaptive_cache_config", "0");
   option_parser_register(
       opp, "-gpgpu_shmem_sizeDefault", OPT_UINT32, &gpgpu_shmem_sizeDefault,
@@ -616,6 +794,8 @@ void gpgpu_sim_config::reg_options(option_parser_t opp) {
   m_shader_config.reg_options(opp);
   m_memory_config.reg_options(opp);
   power_config::reg_options(opp);
+  option_parser_register(opp, "-treelet_based_traversal", OPT_BOOL, &treelet_based_traversal,
+                         "selects which traceRay traversal function to use, 0 = default DFS, 1 = treelet based", "0");
   option_parser_register(opp, "-gpgpu_intermittent_stats", OPT_BOOL, &gpu_intermittent_stats,
                          "print intermittent stats", "0");
   option_parser_register(opp, "-gpgpu_intermittent_stats_freq", OPT_INT64, &gpu_intermittent_stats_freq,
@@ -727,123 +907,15 @@ void gpgpu_sim_config::reg_options(option_parser_t opp) {
                          &(gpgpu_ctx->device_runtime->g_max_sim_rt_kernels),
                          "Max simulated kernels, used to limit how many frames we render. Default: 0",
                          "0");
-  option_parser_register(opp, "-print_mem_transactions", OPT_BOOL,
-                         &(gpgpu_ctx->device_runtime->g_print_mem_transactions),
-                         "Enable(1) or disable(0) printing the transactions vector in traceRay() function for all threads, in vulkan_ray_tracing.cc. Default: 0",
-                         "0");
-  option_parser_register(opp, "-print_cache_transactions", OPT_BOOL,
-                         &(gpgpu_ctx->device_runtime->g_print_cache_transactions),
-                         "Enable(1) or disable(0) printing the RT cache accesses in shader.cc. Default: 0",
-                         "0");
-  option_parser_register(opp, "-print_cta_start_finish", OPT_BOOL,
-                         &(gpgpu_ctx->device_runtime->g_print_cta_start_finish),
-                         "Enable(1) or disable(0) printing CTA start/finish cycles. Default: 0",
-                         "0");
-  option_parser_register(opp, "-print_rt_start_finish", OPT_BOOL,
-                         &(gpgpu_ctx->device_runtime->g_print_rt_start_finish),
-                         "Enable(1) or disable(0) printing RT core arrive/complete cycles for all warps. Default: 0",
-                         "0");
-  option_parser_register(opp, "-print_rt_warp_latency_dist", OPT_BOOL,
-                         &(gpgpu_ctx->device_runtime->g_print_rt_warp_latency_dist),
-                         "Enable(1) or disable(0) printing warp latency distribution in RT cores. Default: 0",
-                         "0");                         
-  option_parser_register(opp, "-print_node_parent_map", OPT_BOOL,
-                         &(gpgpu_ctx->device_runtime->g_print_node_parent_map),
-                         "Enable(1) or disable(0) printing node parent map of the BVH tree for ray tracing. Default: 0",
-                         "0");                         
-  option_parser_register(opp, "-rt_coop_threads", OPT_BOOL,
-                         &(gpgpu_ctx->device_runtime->g_rt_coop_threads),
-                         "Enable(1) or disable(0) multi-thread BVH traversal for RT. Default: 0",
-                         "0");
-  option_parser_register(opp, "-rt_coop_push_to_own_stack", OPT_BOOL,
-                         &(gpgpu_ctx->device_runtime->g_rt_coop_push_to_own_stack),
-                         "Enable(1) or disable(0) helper threads push child nodes to their own stacks, instead of the main thread's stack. Only relevant for multi-threaded BVH traversal. Default: 0",
-                         "0");
-  option_parser_register(opp, "-rt_print_timeline", OPT_BOOL,
-                         &(gpgpu_ctx->device_runtime->g_rt_print_timeline),
-                         "Enable(1) or disable(0) printing rt timeline. Default: 0",
-                         "0");
-  option_parser_register(opp, "-rt_coop_subwarp_config", OPT_INT32,
-                         &(gpgpu_ctx->device_runtime->g_rt_coop_subwarp_config),
-                         "Choose subwarp config for CoopRT. (0) is 32 threads, (1) is 16 threads, (2) is 8 threads, (3) is 4 threads. Default: 0",
-                         "0");
-                                                         
+  option_parser_register(opp, "-max_treelet_size", OPT_INT32,
+                         &max_treelet_size,
+                         "GPU device runtime synchronize depth", "49152"); //48 KB
+  option_parser_register(opp, "-max_concurrent_rays", OPT_INT32,
+                         &maxConcurrentRays,
+                         "GPU device runtime synchronize depth", "668"); //48 KB
 }
 
 /////////////////////////////////////////////////////////////////////////////
-
-void init_coop_subwarp_configs() {
-  coop_warp_configs.emplace(0,std::map<int,std::vector<int>>{});
-  coop_warp_configs.emplace(1,std::map<int,std::vector<int>>{});
-  coop_warp_configs.emplace(2,std::map<int,std::vector<int>>{});
-  coop_warp_configs.emplace(3,std::map<int,std::vector<int>>{});
-  std::vector<int> tids;
-  for (int i = 0; i < 32; i++) {
-    tids.push_back(i);
-  }  
-  for (int i = 0; i < 32; i++) {
-    coop_warp_configs[0].emplace(i,tids);
-  }
-  tids.clear();
-
-  std::vector<int> tids1;
-  for (int i = 0; i < 16; i++) {
-    tids.push_back(i);
-    tids1.push_back(i+16);
-  }
-  for (int i = 0; i < 16; i++) {
-    coop_warp_configs[1].emplace(i,tids);
-    coop_warp_configs[1].emplace(i+16,tids1);
-  }
-  tids.clear();
-  tids1.clear();
-
-
-  std::vector<int> tids2;
-  std::vector<int> tids3;
-  for (int i = 0; i < 8; i++) {
-    tids.push_back(i);
-    tids1.push_back(i+8);
-    tids2.push_back(i+16);
-    tids3.push_back(i+24);
-  }
-  for (int i = 0; i < 8; i++) {
-    coop_warp_configs[2].emplace(i,tids);
-    coop_warp_configs[2].emplace(i+8,tids1);
-    coop_warp_configs[2].emplace(i+16,tids2);
-    coop_warp_configs[2].emplace(i+24,tids3);
-  }
-  tids.clear();
-  tids1.clear();
-  tids2.clear();
-  tids3.clear();
-
-
-  std::vector<int> tids4;
-  std::vector<int> tids5;
-  std::vector<int> tids6;
-  std::vector<int> tids7;
-  for (int i = 0; i < 4; i++) {
-    tids.push_back(i);
-    tids1.push_back(i+4);
-    tids2.push_back(i+8);
-    tids3.push_back(i+12);
-    tids4.push_back(i+16);
-    tids5.push_back(i+20);
-    tids6.push_back(i+24);
-    tids7.push_back(i+28);
-  }
-  for (int i = 0; i < 4; i++) {
-    coop_warp_configs[3].emplace(i,tids);
-    coop_warp_configs[3].emplace(i+4,tids1);
-    coop_warp_configs[3].emplace(i+8,tids2);
-    coop_warp_configs[3].emplace(i+12,tids3);
-    coop_warp_configs[3].emplace(i+16,tids4);
-    coop_warp_configs[3].emplace(i+20,tids5);
-    coop_warp_configs[3].emplace(i+24,tids6);
-    coop_warp_configs[3].emplace(i+28,tids7);
-  }
-}
 
 void increment_x_then_y_then_z(dim3 &i, const dim3 &bound) {
   i.x++;
@@ -994,8 +1066,6 @@ void gpgpu_sim::stop_all_running_kernels() {
 }
 
 void exec_gpgpu_sim::createSIMTCluster() {
-    // Initialize coop subwarp configs
-  init_coop_subwarp_configs();
   m_cluster = new simt_core_cluster *[m_shader_config->n_simt_clusters];
   for (unsigned i = 0; i < m_shader_config->n_simt_clusters; i++)
     m_cluster[i] =
@@ -1013,7 +1083,7 @@ gpgpu_sim::gpgpu_sim(const gpgpu_sim_config &config, gpgpu_context *ctx)
 
 #ifdef GPGPUSIM_POWER_MODEL
   m_gpgpusim_wrapper = new gpgpu_sim_wrapper(config.g_power_simulation_enabled,
-                                             config.g_power_config_name);
+                                             config.g_power_config_name, config.g_power_simulation_mode, config.g_dvfs_enabled);
 #endif
 
   m_shader_stats = new shader_core_stats(m_shader_config);
@@ -1211,6 +1281,14 @@ void gpgpu_sim::init() {
   partiton_reqs_in_parallel_util = 0;
   gpu_sim_cycle_parition_util = 0;
 
+// McPAT initialization function. Called on first launch of GPU
+#ifdef GPGPUSIM_POWER_MODEL
+  if (m_config.g_power_simulation_enabled) {
+    init_mcpat(m_config, m_gpgpusim_wrapper, m_config.gpu_stat_sample_freq,
+               gpu_tot_sim_insn, gpu_sim_insn);
+  }
+#endif
+
   reinit_clock_domains();
   gpgpu_ctx->func_sim->set_param_gpgpu_num_shaders(m_config.num_shader());
   for (unsigned i = 0; i < m_shader_config->n_simt_clusters; i++)
@@ -1236,14 +1314,6 @@ void gpgpu_sim::init() {
   }
 
   if (g_network_mode) icnt_init();
-
-    // McPAT initialization function. Called on first launch of GPU
-#ifdef GPGPUSIM_POWER_MODEL
-  if (m_config.g_power_simulation_enabled) {
-    init_mcpat(m_config, m_gpgpusim_wrapper, m_config.gpu_stat_sample_freq,
-               gpu_tot_sim_insn, gpu_sim_insn);
-  }
-#endif
 }
 
 void gpgpu_sim::update_stats() {
@@ -1266,6 +1336,11 @@ void gpgpu_sim::update_stats() {
   m_total_cta_launched = 0;
   gpu_completed_cta = 0;
   gpu_occupancy = occupancy_stats();
+}
+
+PowerscalingCoefficients *gpgpu_sim::get_scaling_coeffs()
+{
+  return m_gpgpusim_wrapper->get_scaling_coeffs();
 }
 
 void gpgpu_sim::print_stats() {
@@ -1348,6 +1423,18 @@ std::string gpgpu_sim::executed_kernel_info_string() {
   }
   statout << std::endl;
 
+  return statout.str();
+}
+
+std::string gpgpu_sim::executed_kernel_name() {
+  std::stringstream statout;  
+  if( m_executed_kernel_names.size() == 1)
+     statout << m_executed_kernel_names[0];
+  else{
+    for (unsigned int k = 0; k < m_executed_kernel_names.size(); k++) {
+      statout << m_executed_kernel_names[k] << " ";
+    }
+  }
   return statout.str();
 }
 void gpgpu_sim::set_cache_config(std::string kernel_name,
@@ -1446,61 +1533,112 @@ void gpgpu_sim::clear_executed_kernel_info() {
 }
 void gpgpu_sim::gpu_print_stat() {
   FILE *statfout = stdout;
-  if(m_config.gpgpu_ctx->device_runtime->g_print_cta_start_finish) {
-    for(auto it: cta_start_finish_cycles)
-      fprintf(statfout,"CTA: %d %lld %lld %d\n",it.first, it.second[0], it.second[1], it.second[2]);
+
+  unsigned avg_queue_delay = 0;
+  fprintf(statfout, "queue_delay: ");
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    unsigned queue_delay = m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_total_cycles_without_dispatching();
+    fprintf(statfout, "%d ", queue_delay);
+    avg_queue_delay += queue_delay;
   }
-  if(m_config.gpgpu_ctx->device_runtime->g_print_rt_start_finish) {
-    for(auto it: rt_start_finish_cycles) {
-      for(int i = 0; i < it.second.size(); i+=2) {
-        fprintf(statfout,"RT: %d %lld %lld ",it.first, it.second[i], it.second[i+1]);
-          for (unsigned i=0; i<warp_statuses; i++) {
-            for (unsigned j=0; j<ray_statuses; j++) {
-              fprintf(statfout, "%d ", rt_warp_latency_dist[it.first][i/2][i*ray_statuses+j]);
-            }
-          }
-        fprintf(statfout,"\n");  
-      }
-    }
+  fprintf(statfout, "\n");
+  avg_queue_delay /= m_config.num_cluster();
+  //gpu_sim_cycle -= avg_queue_delay;
+  fprintf(statfout, "avg_queue_delay = %d\n\n", avg_queue_delay);
+
+  // trace_ray_cache_stats
+  fprintf(statfout, "trace_ray_cache_stats:\n");
+  fprintf(statfout, "HITS: ");
+  unsigned trace_ray_total_hits = 0;
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    fprintf(statfout, "%d ", m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_trace_ray_hits());
+    trace_ray_total_hits += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_trace_ray_hits();
   }
-  if(m_config.gpgpu_ctx->device_runtime->g_print_mem_transactions) {
-    std::ofstream memAccessFile;
-    std::string memAccessFileName;    
-    auto now = std::chrono::system_clock::now();
-    auto UTC = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
-    memAccessFileName = "memAccessFile_"+std::to_string(UTC)+".csv";
-    std::cout << "Writing mem access to file " << memAccessFileName << std::endl;
-    memAccessFile.open(memAccessFileName, std::ofstream::out);
-    memAccessFile << "idx,tid,address,size,type,children,thit,eliminator_address\n";
-    int accessIdx = 0;
-    for(auto it: memAccessVector) {
-      memAccessFile << std::dec << accessIdx << "," 
-                  << it.tid << ","
-                  << std::hex << it.address << "," << std::dec << it.size << "," << it.type << ",";
-      for(auto it2: it.child_addresses)
-        if(it2 != nullptr)
-          memAccessFile << std::hex << it2 << ",";
-      memAccessFile << std::dec << "," << it.thit << "," << it.eliminator_address << "\n";
-    }
-    memAccessFile.close();
+  fprintf(statfout, "%d\n", trace_ray_total_hits);
+
+  fprintf(statfout, "MISSES: ");
+  unsigned trace_ray_total_misses = 0;
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    fprintf(statfout, "%d ", m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_trace_ray_misses());
+    trace_ray_total_misses += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_trace_ray_misses();
   }
-  if(m_config.gpgpu_ctx->device_runtime->g_rt_coop_threads) {
-    std::ofstream rtStatsFile;
-    std::string rtStatsFileName;
-    auto now = std::chrono::system_clock::now();
-    auto UTC = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
-    rtStatsFileName = "rtStatsFile_"+std::to_string(UTC)+".csv";
-    std::cout << "Writing rt stats to file " << rtStatsFileName << std::endl;
-    rtStatsFile.open(rtStatsFileName, std::ofstream::out);
-    rtStatsFile << "ctaid,active_count,ray_number,total_nodes,helped_nodes\n";
-    for(auto it: all_rt_stats) {
-      rtStatsFile << std::dec
-                  << it.ctaid << ","
-                  << it.active_threads << "," << it.ray_bounce_number << "," 
-                  << it.total_nodes << "," << it.helped_nodes << std::endl;
-    }
-    rtStatsFile.close();
+  fprintf(statfout, "%d\n", trace_ray_total_misses);
+
+  fprintf(statfout, "PENDING_HITS: ");
+  unsigned trace_ray_total_pending_hits = 0;
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    fprintf(statfout, "%d ", m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_trace_ray_pending_hits());
+    trace_ray_total_pending_hits += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_trace_ray_pending_hits();
   }
+  fprintf(statfout, "%d\n\n", trace_ray_total_pending_hits);
+
+  // L1 RT
+  fprintf(statfout, "L1 RT HITS BY PREFETCH: ");
+  unsigned trace_ray_total_l1_hits_by_prefetches = 0;
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    fprintf(statfout, "%d ", m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->l1_cache_rt_hits_by_prefetches);
+    trace_ray_total_l1_hits_by_prefetches += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->l1_cache_rt_hits_by_prefetches;
+  }
+  fprintf(statfout, "%d\n", trace_ray_total_l1_hits_by_prefetches);
+
+  fprintf(statfout, "L1 RT HITS BY DEMAND LOAD: ");
+  unsigned trace_ray_total_l1_hits_by_demand_load = 0;
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    fprintf(statfout, "%d ", m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->l1_cache_rt_hits_by_demand_load);
+    trace_ray_total_l1_hits_by_demand_load += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->l1_cache_rt_hits_by_demand_load;
+  }
+  fprintf(statfout, "%d\n", trace_ray_total_l1_hits_by_demand_load);
+
+  fprintf(statfout, "L1 RT MISSES: ");
+  unsigned trace_ray_total_l1_misses = 0;
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    fprintf(statfout, "%d ", m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->l1_cache_rt_misses);
+    trace_ray_total_l1_misses += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->l1_cache_rt_misses;
+  }
+  fprintf(statfout, "%d\n", trace_ray_total_l1_misses);
+
+  fprintf(statfout, "L1 RT PENDING HITS: ");
+  unsigned trace_ray_total_l1_pending_hits = 0;
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    fprintf(statfout, "%d ", m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->l1_cache_rt_pending_hits);
+    trace_ray_total_l1_pending_hits += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->l1_cache_rt_pending_hits;
+  }
+  fprintf(statfout, "%d\n\n", trace_ray_total_l1_pending_hits);
+
+  // L2 RT
+  fprintf(statfout, "L2 RT HITS BY PREFETCH: ");
+  unsigned trace_ray_total_l2_hits_by_prefetches = 0;
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    fprintf(statfout, "%d ", m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->l2_cache_rt_hits_by_prefetches);
+    trace_ray_total_l2_hits_by_prefetches += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->l2_cache_rt_hits_by_prefetches;
+  }
+  fprintf(statfout, "%d\n", trace_ray_total_l2_hits_by_prefetches);
+
+  fprintf(statfout, "L2 RT HITS BY DEMAND LOAD: ");
+  unsigned trace_ray_total_l2_hits_by_demand_load = 0;
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    fprintf(statfout, "%d ", m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->l2_cache_rt_hits_by_demand_load);
+    trace_ray_total_l2_hits_by_demand_load += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->l2_cache_rt_hits_by_demand_load;
+  }
+  fprintf(statfout, "%d\n", trace_ray_total_l2_hits_by_demand_load);
+
+  fprintf(statfout, "L2 RT MISSES: ");
+  unsigned trace_ray_total_l2_misses = 0;
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    fprintf(statfout, "%d ", m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->l2_cache_rt_misses);
+    trace_ray_total_l2_misses += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->l2_cache_rt_misses;
+  }
+  fprintf(statfout, "%d\n", trace_ray_total_l2_misses);
+
+  fprintf(statfout, "L2 RT PENDING HITS: ");
+  unsigned trace_ray_total_l2_pending_hits = 0;
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    fprintf(statfout, "%d ", m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->l2_cache_rt_pending_hits);
+    trace_ray_total_l2_pending_hits += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->l2_cache_rt_pending_hits;
+  }
+  fprintf(statfout, "%d\n\n", trace_ray_total_l2_pending_hits);
+
+  // Usual output
   std::string kernel_info_str = executed_kernel_info_string();
   fprintf(statfout, "%s", kernel_info_str.c_str());
 
@@ -1590,6 +1728,348 @@ void gpgpu_sim::gpu_print_stat() {
          (unsigned)((gpu_tot_sim_insn + gpu_sim_insn) / elapsed_time));
 
   // shader_print_l1_miss_stat( stdout );
+
+  // Tommy's RT Measurements
+  unsigned long long trace_ray_inst_latency = 0;
+  assert(writeback_cycles.size() == issue_cycles.size());
+  for (unsigned i = 0; i < writeback_cycles.size(); i++)
+  {
+    trace_ray_inst_latency += writeback_cycles[i] - issue_cycles[i];
+  }
+  fprintf(statfout, "trace_ray_inst_latency = %lld\n", trace_ray_inst_latency);
+  fprintf(statfout, "avg_trace_ray_inst_latency = %lld\n", trace_ray_inst_latency/writeback_cycles.size());
+
+  fprintf(statfout, "mshr_rt_merges = %d\n", mshr_rt_merges);
+  fprintf(statfout, "mshr_all_merges = %d\n", mshr_all_merges);
+  // fprintf(statfout, "mshr merges by block_addr:\n");
+  // for (auto block : block_addr_merge_tracker) {
+  //   fprintf(statfout, "0x%lx: %d\n", block.first, block.second);
+  // }
+
+  unsigned unclassified_but_accessed = 0;
+  std::vector<unsigned> total_prefetch_effectiveness = {0, 0, 0, 0, 0};
+  std::vector<unsigned> prefetch_effectiveness_per_cluster; // TOO_LATE:{0,0,0...,0,0}, LATE:{0,0,0,0,0},....
+  for(int n=0; n < m_config.num_cluster() * 5; n++) prefetch_effectiveness_per_cluster.push_back((unsigned)0);
+
+  for (unsigned i = 0; i < m_config.num_cluster(); i++) {
+    std::map<new_addr_type, std::vector<prefetch_block_info>> prefetch_request_tracker = m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->prefetch_request_tracker;
+    for (auto &vec : prefetch_request_tracker) {
+      // Scan once and see if that address has any entries that were classified which means they were 'accessed' before
+      bool accessed = false;
+      for (auto &info : vec.second) {
+        if (info.effectiveness != UNCLASSIFIED && info.effectiveness != NEVER_USED) {
+          accessed = true;
+        }
+      }
+
+      // If it has been accessed before, then label all the ones that weren't classifed as TOO_LATE
+      if (accessed) {
+        for (auto &prefetch_info : vec.second) {
+          if (prefetch_info.effectiveness == UNCLASSIFIED) {
+            unclassified_but_accessed++;
+            // prefetch_info.effectiveness = TOO_LATE;
+            continue;
+          }
+          total_prefetch_effectiveness[prefetch_info.effectiveness]++;
+          prefetch_effectiveness_per_cluster[i + prefetch_info.effectiveness * m_config.num_cluster()]++;
+        }
+      }
+      else { // If never accessed, then label as NEVER_USED
+        for (auto &prefetch_info : vec.second) {
+          if (prefetch_info.effectiveness == UNCLASSIFIED) {
+            prefetch_info.effectiveness = NEVER_USED;
+          }
+          total_prefetch_effectiveness[prefetch_info.effectiveness]++;
+          prefetch_effectiveness_per_cluster[i + prefetch_info.effectiveness * m_config.num_cluster()]++;
+        }
+      }
+    }
+    // std::vector<prefetch_block_info> prefetch_request_tracker = m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->prefetch_request_tracker;
+    // for (auto &prefetch_info : prefetch_request_tracker) {
+    //   if (prefetch_info.effectiveness == UNCLASSIFIED) {
+    //     prefetch_info.effectiveness = NEVER_USED;
+    //   }
+    //   total_prefetch_effectiveness[prefetch_info.effectiveness]++;
+    //   prefetch_effectiveness_per_cluster[i + prefetch_info.effectiveness * m_config.num_cluster()]++;
+    // }
+  }
+  fprintf(statfout, "unclassified_but_accessed=%d\n", unclassified_but_accessed);
+  fprintf(statfout, "\n");
+
+  fprintf(statfout, "prefetch_treelet_switches: [Clusters 0, ..., N, Total Sum]\n");
+  unsigned total_prefetch_treelet_switches = 0;
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    fprintf(statfout, "%d ", m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_prefetch_treelet_switches());
+    total_prefetch_treelet_switches += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_prefetch_treelet_switches();
+  }
+  fprintf(statfout, "%d\n\n", total_prefetch_treelet_switches);
+
+  fprintf(statfout, "cycles_between_prefetch_treelet_switch: [Clusters 0, ..., N, Total Avg]\n");
+  unsigned total_total_cycles_between_prefetch_treelet_switch = 0;
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    fprintf(statfout, "%f ", double(m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_total_cycles_between_prefetch_treelet_switch())/double(m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_prefetch_treelet_switches()));
+    total_total_cycles_between_prefetch_treelet_switch += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_total_cycles_between_prefetch_treelet_switch();
+  }
+  fprintf(statfout, "%f\n\n", double(total_total_cycles_between_prefetch_treelet_switch)/double(total_prefetch_treelet_switches));
+
+  fprintf(statfout, "Prefetch Effectiveness per cluster: [Clusters 0, ..., N, Total Sum]\n");
+  for (int i = 0; i < 5; i++) {
+    for (int j = 0; j < m_config.num_cluster(); j++) {
+      fprintf(statfout, "%d ", prefetch_effectiveness_per_cluster[i * m_config.num_cluster() + j]);
+    }
+    fprintf(statfout, "%d\n", total_prefetch_effectiveness[i]);
+  }
+  fprintf(statfout, "\n");
+
+  fprintf(statfout, "Wasted Prefetch Opportunities: [Clusters 0, ..., N, Total Sum]\n");
+  unsigned total_unused_prefetch_opportunity = 0;
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    fprintf(statfout, "%d ", m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_unused_prefetch_opportunity());
+    total_unused_prefetch_opportunity += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_unused_prefetch_opportunity();
+  }
+  fprintf(statfout, "%d\n", total_unused_prefetch_opportunity);
+
+  fprintf(statfout, "Prefetches Issued: [Clusters 0, ..., N, Total Sum]\n");
+  unsigned total_prefetches_issued = 0;
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    fprintf(statfout, "%d ", m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_prefetches_issued());
+    total_prefetches_issued += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_prefetches_issued();
+  }
+  fprintf(statfout, "%d\n", total_prefetches_issued);
+
+  fprintf(statfout, "\n");
+
+  fprintf(statfout, "Prefetches Added: [Clusters 0, ..., N, Total Sum]\n");
+  unsigned total_prefetches_added = 0;
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    fprintf(statfout, "%d ", m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_prefetches_added_to_queue());
+    total_prefetches_added += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_prefetches_added_to_queue();
+  }
+  fprintf(statfout, "%d\n", total_prefetches_added);
+
+  fprintf(statfout, "\n");
+
+  fprintf(statfout, "Prefetches Removed: [Clusters 0, ..., N, Total Sum]\n");
+  unsigned total_prefetches_removed = 0;
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    fprintf(statfout, "%d ", m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_prefetches_removed_from_queue());
+    total_prefetches_removed += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_prefetches_removed_from_queue();
+  }
+  fprintf(statfout, "%d\n", total_prefetches_removed);
+
+  fprintf(statfout, "\n");
+  
+  fprintf(statfout, "Prefetches Readded: [Clusters 0, ..., N, Total Sum]\n");
+  unsigned total_prefetches_readded = 0;
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    fprintf(statfout, "%d ", m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_prefetches_readded_to_queue());
+    total_prefetches_readded += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_prefetches_readded_to_queue();
+  }
+  fprintf(statfout, "%d\n", total_prefetches_readded);
+
+  fprintf(statfout, "\n");
+
+  fprintf(statfout, "total_demand_load_mf_lat: [Clusters 0, ..., N, Total Sum]\n");
+  unsigned total_demand_load_mf_lat = 0;
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    fprintf(statfout, "%d ", m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_total_demand_load_mf_lat());
+    total_demand_load_mf_lat += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_total_demand_load_mf_lat();
+  }
+  fprintf(statfout, "%d\n", total_demand_load_mf_lat);
+
+  fprintf(statfout, "\n");
+
+  fprintf(statfout, "total_demand_load_mfs: [Clusters 0, ..., N, Total Sum]\n");
+  unsigned total_demand_load_mfs = 0;
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    fprintf(statfout, "%d ", m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_total_demand_load_mfs());
+    total_demand_load_mfs += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_total_demand_load_mfs();
+  }
+  fprintf(statfout, "%d\n", total_demand_load_mfs);
+
+  fprintf(statfout, "\n");
+
+  double avg_rt_demand_load_mf_lat = double((double)total_demand_load_mf_lat / (double)total_demand_load_mfs);
+  fprintf(statfout, "avg_rt_demand_load_mf_lat=%f\n", avg_rt_demand_load_mf_lat);
+
+  fprintf(statfout, "\n");
+
+  // fprintf(statfout, "avg_prefetch_generate_issue_cycle_difference: [Clusters 0, ..., N, Total Sum]\n");
+  unsigned total_prefetch_generate_issue_cycle_difference = 0;
+  unsigned total_tracked_counts = 0;
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    // fprintf(statfout, "%d ", m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_total_demand_load_mf_lat());
+    total_prefetch_generate_issue_cycle_difference += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_total_demand_load_mf_lat();
+    total_tracked_counts += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_tracked_counts();
+  }
+  if (total_tracked_counts != 0)
+    fprintf(statfout, "avg_prefetch_generate_issue_cycle_difference=%f\n", double(total_prefetch_generate_issue_cycle_difference/total_tracked_counts));
+
+  unsigned total_matches = 0;
+  unsigned total_comparisons = 0;
+  for (int i = 0; i < m_config.num_cluster(); i++) {
+    // fprintf(statfout, "%d ", m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_total_demand_load_mf_lat());
+    total_matches += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_matches();
+    total_comparisons += m_cluster[i]->get_m_core()[0]->get_m_rt_unit()->get_comparisons();
+    // printf("total_matches: %d\n", total_matches);
+    // printf("total_comparisons: %d\n", total_comparisons);
+  }
+  if (total_comparisons != 0) {
+    fprintf(statfout, "total_comparisons=%d\n", total_comparisons);
+    fprintf(statfout, "hierarchical_comparator_accuracy=%f\n", double(double(total_matches)/double(total_comparisons)));
+  }
+
+  // // Print out the whole treelet structure whether or not the nodes are accessed
+  // fprintf(statfout, "Treelet Structure\n");
+  // for (auto treelet : VulkanRayTracing::treelet_roots_addr_only) { //treelet_addr_only_child_map
+  //   if (treelet.second.size() == 0) {
+  //     fprintf(statfout, "0x%x : 0x%x\n", treelet.first, treelet.first);
+  //   }
+  //   else {
+  //     for (auto child : treelet.second) {
+  //       fprintf(statfout, "0x%x : 0x%x\n", child.addr, treelet.first);
+  //     }
+  //   }
+  // }
+  // fprintf(statfout, "\n");
+
+  // // Print what treelet root each node belongs too
+  // fprintf(statfout, "Treelet children and roots\n");
+  // for (auto node : treelet_root_and_children) {
+  //   fprintf(statfout, "0x%x : 0x%x\n", node.first, node.second);
+  // }
+  // fprintf(statfout, "\n");
+
+  // // Printing the tracker maps
+  // fprintf(statfout, "Global ray node tracker\n");
+  // for (auto node : global_ray_node_tracker) {
+  //   fprintf(statfout, "0x%x : %d\n", node.first, node.second);
+  // }
+  // fprintf(statfout, "\n");
+
+  // fprintf(statfout, "Clustered ray node tracker (grouped by CTAID/warpid)\n");
+  // for (auto cta : ray_node_tracker) {
+  //   fprintf(statfout, "CTA/Warp %d\n", cta.first);
+  //   for (auto node : cta.second) {
+  //     fprintf(statfout, "0x%x : %d\n", node.first, node.second);
+  //   }
+  // }
+  // fprintf(statfout, "\n");
+
+  // csv for clustering
+  // FILE* statfout2 = fopen("allnodes.csv", "w");
+  // //fprintf(statfout, "allnodes csv\n");
+  // for (auto node : VulkanRayTracing::treelet_roots_addr_only) {
+  //   if (node.second.size() == 0) {
+  //     fprintf(statfout2, "0x%x,0x%x,", node.first, node.first);
+  //     fprintf(statfout2, "%d", global_ray_node_tracker[(new_addr_type)node.first]); // number of times accessed globally
+  //     for (auto cta : ray_node_tracker) {
+  //       fprintf(statfout2, ",%d", cta.second[(new_addr_type)node.first]); // number of times accessed by each CTA/Warp
+  //     }
+  //     fprintf(statfout2, "\n");
+  //   }
+  //   else {
+  //     for (auto child : node.second) {
+  //       fprintf(statfout2, "0x%x,0x%x,", child.addr, node.first);
+  //       fprintf(statfout2, "%d", global_ray_node_tracker[(new_addr_type)child.addr]); // number of times accessed globally
+  //       for (auto cta : ray_node_tracker) {
+  //         fprintf(statfout2, ",%d", cta.second[(new_addr_type)child.addr]); // number of times accessed by each CTA/Warp
+  //       }
+  //       fprintf(statfout2, "\n");
+  //     }
+  //   }
+  // }
+  // // fprintf(statfout, "\n");
+
+  // FILE* statfout3 = fopen("hitnodes.csv", "w");
+  // // fprintf(statfout, "hitonly csv\n");
+  // for (auto node : treelet_root_and_children) {
+  //   fprintf(statfout3, "0x%x,0x%x,", node.first, node.second); // node address, treelet root
+  //   fprintf(statfout3, "%d", global_ray_node_tracker[node.first]); // number of times accessed globally
+  //   for (auto cta : ray_node_tracker) {
+  //     fprintf(statfout3, ",%d", cta.second[node.first]); // number of times accessed by each CTA/Warp
+  //   }
+  //   fprintf(statfout3, "\n");
+  // }
+
+  // Size csv
+  // FILE* statfout4 = fopen("treeletsizes.csv", "w");
+  // for (auto treelet : VulkanRayTracing::treelet_roots) {
+  //   unsigned size = 0;
+  //   size += treelet.first.size;
+  //   if (treelet.second.size() != 0) {
+  //     for (auto child : treelet.second) {
+  //       size += child.size;
+  //     }
+  //   }
+  //   fprintf(statfout4, "0x%x,%d\n", treelet.first.addr, size);
+  // }
+
+  fprintf(statfout, "total accessed data size:%d\n", VulkanRayTracing::accessedDataSize);
+
+  // nodes accessed
+  // int maxConcurrentRays = m_config.maxConcurrentRays;
+  // double no_treelets = 0.0;
+  // double with_treelets = 0.0;
+  // unsigned totalAvgRays = 0;
+  // unsigned totalTreeletNodesAccessed = 0;
+  // double speedup = 0.0;
+  // unsigned max_bin = 0;
+  // double weight_total = 0.0;
+
+  // for (auto treelet : treeletIDToRayIDMap) {
+  //   int avgRays = 0;
+  //   for (auto bin : per_treelet_difference_histogram[(new_addr_type)treelet.first]) {
+  //     if (std::abs(int(bin.first)) > max_bin) {
+  //       max_bin = std::abs(int(bin.first));
+  //     }
+  //     if (std::abs(int(bin.first)) <= maxConcurrentRays && std::abs(int(bin.first)) > 0) {
+  //       avgRays += bin.second;
+  //     }
+  //   }
+  //   totalAvgRays += avgRays;
+  // }
+  // fprintf(statfout, "max_bin:%d\n", max_bin);
+  // fprintf(statfout, "totalAvgRays:%d\n", totalAvgRays);
+
+  // for (auto treelet : VulkanRayTracing::treelet_roots) {
+  //   if (treeletIDToRayIDMap.count((new_addr_type)treelet.first.addr)) {
+  //     int nodes_in_treelet = treelet.second.size() + 1;
+
+  //     int avgRays = 0;
+  //     for (auto bin : per_treelet_difference_histogram[(new_addr_type)treelet.first.addr]) {
+  //       if (std::abs(int(bin.first)) <= maxConcurrentRays && std::abs(int(bin.first)) > 0) {
+  //         avgRays += bin.second;
+  //       }
+  //     }
+
+  //     no_treelets += double(avgRays) * (log(nodes_in_treelet) / log(6));
+  //     with_treelets += double(nodes_in_treelet);
+
+  //     double current_weight = double(avgRays) / double(totalAvgRays);
+  //     weight_total += current_weight;
+  //     double current_speedup = double(avgRays) * (log(nodes_in_treelet) / log(6)) / double(nodes_in_treelet);
+  //     double weighted_speedup = current_weight * current_speedup;
+  //     fprintf(statfout, "avgRays:%d avgRays weight:%f,avgRays x log6nodes:%f, nodes_in_treelet:%d, speedup:%f, weighted speedup:%f\n", avgRays, current_weight, double(avgRays) * (log(nodes_in_treelet) / log(6)), nodes_in_treelet, current_speedup, weighted_speedup);
+  //     speedup += weighted_speedup;
+  //   }
+  // }
+  // fprintf(statfout, "weight_total:%f\n", weight_total);
+  // fprintf(statfout, "old number no treelets/with treelets:%f\n", no_treelets/with_treelets);
+  // fprintf(statfout, "speedup:%f\n", speedup);
+  // fprintf(statfout, "max concurrent rays:%d\n", maxConcurrentRays);
+
+  // fprintf(statfout, "total treelet nodes accessed:%d\n", totalTreeletNodesAccessed);
+
+  // FILE* statfout5 = fopen("difference_histogram.csv", "w");
+  // fprintf(statfout, "difference histogram:\n");
+  // for (auto bin : per_treelet_difference_histogram) {
+  //   fprintf(statfout, "%d,%d\n", bin.first, bin.second);
+  //   fprintf(statfout5, "%d,%d\n", bin.first, bin.second);
+  // }
+
+  // fprintf(statfout, "\n");
+  
   shader_print_cache_stats(statfout);
   fflush(statfout);
 
@@ -1608,10 +2088,20 @@ void gpgpu_sim::gpu_print_stat() {
   m_shader_stats->print(statfout);
 #ifdef GPGPUSIM_POWER_MODEL
   if (m_config.g_power_simulation_enabled) {
+    if(m_config.g_power_simulation_mode > 0){
+        //if(!m_config.g_aggregate_power_stats)
+          mcpat_reset_perf_count(m_gpgpusim_wrapper);
+        calculate_hw_mcpat(m_config, getShaderCoreConfig(), m_gpgpusim_wrapper,
+                  m_power_stats, m_config.gpu_stat_sample_freq,
+                  gpu_tot_sim_cycle, gpu_sim_cycle, gpu_tot_sim_insn,
+                  gpu_sim_insn, m_config.g_power_simulation_mode, m_config.g_dvfs_enabled, 
+                  m_config.g_hw_perf_file_name, m_config.g_hw_perf_bench_name, executed_kernel_name(), m_config.accelwattch_hybrid_configuration, m_config.g_aggregate_power_stats);
+    }
     m_gpgpusim_wrapper->print_power_kernel_stats(
         gpu_sim_cycle, gpu_tot_sim_cycle, gpu_tot_sim_insn + gpu_sim_insn,
         kernel_info_str, true);
-    mcpat_reset_perf_count(m_gpgpusim_wrapper);
+    //if(!m_config.g_aggregate_power_stats)
+      mcpat_reset_perf_count(m_gpgpusim_wrapper);
   }
 #endif
 
@@ -1689,18 +2179,12 @@ void gpgpu_sim::gpu_print_stat() {
   fprintf(statfout, "rt_max_tree_depth = %d\n", gpgpu_ctx->func_sim->g_max_tree_depth);
   fprintf(statfout, "rt_max_nodes_per_ray = %d\n", gpgpu_ctx->func_sim->g_max_nodes_per_ray);
   fprintf(statfout, "rt_tot_nodes_per_ray = %d\n", gpgpu_ctx->func_sim->g_tot_nodes_per_ray);
-  fprintf(statfout, "rt_timing_eliminations = %d\n", rt_timing_eliminations);
   fprintf(statfout, "rt_avg_nodes_per_ray = %f\n", (float)gpgpu_ctx->func_sim->g_tot_nodes_per_ray/(gpgpu_ctx->func_sim->g_n_closesthit_rays + gpgpu_ctx->func_sim->g_n_anyhit_rays));
   fprintf(statfout, "g_inst_type_latency = ");
   for (unsigned i=0; i<28; i++) {
     fprintf(statfout, "%lld ", gpgpu_ctx->func_sim->g_inst_type_latency[i]);
   }
   fprintf(statfout, "\n");
-  fprintf(statfout, "g_inst_type_stall = ");
-  for (unsigned i=0; i<28; i++) {
-    fprintf(statfout, "%lld ", g_inst_type_stall[i]);
-  }
-  fprintf(statfout, "\n");  
   fprintf(statfout, "inst_class_by_shader\n");
   for (unsigned i=0; i<16; i++) {
     fprintf(statfout, "%d:", i);
@@ -2129,6 +2613,7 @@ void gpgpu_sim::cycle() {
           m_power_stats->pwr_mem_stat->n_pre[CURRENT_STAT_IDX][i],
           m_power_stats->pwr_mem_stat->n_rd[CURRENT_STAT_IDX][i],
           m_power_stats->pwr_mem_stat->n_wr[CURRENT_STAT_IDX][i],
+          m_power_stats->pwr_mem_stat->n_wr_WB[CURRENT_STAT_IDX][i],
           m_power_stats->pwr_mem_stat->n_req[CURRENT_STAT_IDX][i]);
     }
   }
@@ -2172,7 +2657,7 @@ void gpgpu_sim::cycle() {
         m_cluster[i]->core_cycle();
         *active_sms += m_cluster[i]->get_n_active_sms();
       }
-      // Update core icnt/cache stats for GPUWattch
+      // Update core icnt/cache stats for AccelWattch
       m_cluster[i]->get_icnt_stats(
           m_power_stats->pwr_mem_stat->n_simt_to_mem[CURRENT_STAT_IDX][i],
           m_power_stats->pwr_mem_stat->n_mem_to_simt[CURRENT_STAT_IDX][i]);
@@ -2202,10 +2687,12 @@ void gpgpu_sim::cycle() {
       // McPAT main cycle (interface with McPAT)
 #ifdef GPGPUSIM_POWER_MODEL
     if (m_config.g_power_simulation_enabled) {
+      if(m_config.g_power_simulation_mode == 0){
       mcpat_cycle(m_config, getShaderCoreConfig(), m_gpgpusim_wrapper,
                   m_power_stats, m_config.gpu_stat_sample_freq,
                   gpu_tot_sim_cycle, gpu_sim_cycle, gpu_tot_sim_insn,
-                  gpu_sim_insn);
+                  gpu_sim_insn, m_config.g_dvfs_enabled);
+      }
     }
 #endif
 

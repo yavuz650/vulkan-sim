@@ -39,7 +39,7 @@
 #include <utility>
 #include <limits.h>
 
-#define INTERSECTION_TABLE_MAX_LENGTH 1000
+#define INTERSECTION_TABLE_MAX_LENGTH 100
 
 enum class IntersectionTableType {
     Baseline,

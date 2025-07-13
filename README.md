@@ -1,17 +1,12 @@
-# CoopRT
-This repo has the source code of ISCA2025 paper [CoopRT: Accelerating BVH Traversal for Ray Tracing via Cooperative Threads](https://dl.acm.org/doi/10.1145/3695053.3731118).
-Following new config options are added to Vulkan-sim
-- `rt_coop_threads` Enables CoopRT when set to (1), default: 0
-- `rt_coop_push_to_own_stack` Helper threads push nodes to their own stacks. Should be enabled(1) with CoopRT. Default: 0
-- `rt_coop_subwarp_config` Change the subwarp config. 0: 32 threads in subwarp, 1: 16 threads, 2: 8 threads, 3: 4 threads.
-
-If you want to enable CoopRT, you just need to set `rt_coop_threads` and `rt_coop_push_to_own_stack` to 1.
-You can find other miscallenous options for profiling in the newly added config file.
+This is the code repo for the paper **Treelet Prefetching For Ray Tracing**. This work is built on top of Vulkan-Sim 2.0.0 and uses LumiBench for the ray tracing workloads.
 
 #  Introduction   
 Welcome to Vulkan-Sim, a cycle level GPU simulator for Vulkan ray tracing workloads. Vulkan-Sim models a modern GPU architecture with a baseline RT unit architecture of our own based on past literature such as Intersection Prediction for Accelerated GPU Ray Tracing by Liu et al. from MICRO 2021.
 
 This document will walk you through Vulkan-Sim installation.
+
+If you use this code in your research, please cite:
+> Yuan Hsi Chou, Tyler Nowicki, Tor M. Aamodt, Treelet Prefetching For Ray Tracing, In proceedings of the ACM/IEEE International Symposium on Microarchitecture (MICRO 2023), Toronto, Ontario, Canada, October 28 – November 1, 2023.
 
 If you use Vulkan-Sim in your research, please cite:  
 > Mohammadreza Saed, Yuan Hsi Chou, Lufei Liu, Tyler Nowicki, Tor M. Aamodt, Vulkan-Sim: A GPU Architecture Simulator for Ray Tracing, In proceedings of the ACM/IEEE International Symposium on Microarchitecture (MICRO 2022), Chicago, Illinois, October 1–5, 2022.
@@ -40,7 +35,7 @@ cd vulkan-sim-root/
 ```
 2. Clone the following repos in the folder you just created. Ensure that the cloned Mesa version matches the Vulkan-Sim version. For example, Vulkan-Sim version 2.0.0 is only supported with mesa-vulkan-sim v2.0.0 release. 
 ``` bash
-git clone https://github.com/ubc-aamodt-group/vulkan-sim
+git clone https://github.com/ubc-aamodt-group/treelet-prefetching-for-rt
 git clone https://github.com/ubc-aamodt-group/mesa-vulkan-sim
 ```
 3. The resulting folder structure should look like this.
@@ -104,7 +99,7 @@ sudo apt-get -y install cmake curl unzip tar libxi-dev libxinerama-dev libxcurso
 3. Copy GPGPU-Sim configurations to the binary directory
 ``` bash
 # Change <vulkan-sim-root> to your own path!
-cp <vulkan-sim-root>/vulkan-sim/configs/tested-cfgs/SM75_RTX2060/* build/linux/bin/.
+cp <vulkan-sim-root>/vulkan-sim/configs/tested-cfgs/treelet_prefetching/* build/linux/bin/.
 ```
 4. Run RayTracingInVulkan
 ``` bash

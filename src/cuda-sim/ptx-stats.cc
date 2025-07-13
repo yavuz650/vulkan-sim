@@ -39,14 +39,9 @@ void ptx_stats::ptx_file_line_stats_options(option_parser_t opp) {
   option_parser_register(
       opp, "-enable_ptx_file_line_stats", OPT_BOOL, &enable_ptx_file_line_stats,
       "Turn on PTX source line statistic profiling. (1 = On)", "1");
-  char filePath[80];
-  snprintf(filePath, sizeof(filePath), "ptx_line_stats_%d.txt", (int)getpid());
-  std::cout << "Writing ptx line stats to " << filePath << std::endl;
-  ptx_line_stats_filename = (char*)malloc(80*sizeof(char));
-  strcpy(ptx_line_stats_filename,filePath);
-  // option_parser_register(
-  //     opp, "-ptx_line_stats_filename", OPT_CSTR, &ptx_line_stats_filename,
-  //     "Output file for PTX source line statistics.", filePath);
+  option_parser_register(
+      opp, "-ptx_line_stats_filename", OPT_CSTR, &ptx_line_stats_filename,
+      "Output file for PTX source line statistics.", "gpgpu_inst_stats.txt");
 }
 
 // implementations
@@ -135,9 +130,8 @@ void ptx_stats::ptx_file_line_stats_write_file() {
 
   ptx_file_line_stats_map_t::iterator it;
   FILE *pfile;
-  printf("opening file %s\n", ptx_line_stats_filename);
-  pfile = fopen(ptx_line_stats_filename, "w");
 
+  pfile = fopen(ptx_line_stats_filename, "w");
   fprintf(
       pfile,
       "kernel line : count latency dram_traffic smem_bk_conflicts smem_warp "

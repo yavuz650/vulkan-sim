@@ -47,26 +47,6 @@ class cuda_device_runtime {
   unsigned long long g_max_total_param_size;
   bool g_cdp_enabled;
   int g_max_sim_rt_kernels;
-  // print the transactions vector in traceRay() function for all threads, in vulkan_ray_tracing.cc
-  bool g_print_mem_transactions;
-  // print the cache accesses in shader.cc
-  bool g_print_cache_transactions;
-  // Print CTA start/finish cycles
-  bool g_print_cta_start_finish;
-  // Print rt core arrive/complete cycles for all warps
-  bool g_print_rt_start_finish;
-  // Print per-warp rt latency distribution info
-  bool g_print_rt_warp_latency_dist;  
-  // print node parent map for rt
-  bool g_print_node_parent_map;  
-  // enable cooprt
-  bool g_rt_coop_threads;
-  // where do helper threads push child nodes? (should be enabled with cooprt)
-  bool g_rt_coop_push_to_own_stack;
-  // print rt timeline
-  bool g_rt_print_timeline;
-  // subwarp config for cooprt
-  bool g_rt_coop_subwarp_config;
 
   // backward pointer
   class gpgpu_context* gpgpu_ctx;
