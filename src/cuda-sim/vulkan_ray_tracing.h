@@ -184,6 +184,8 @@ typedef struct StackEntry {
     int size;
     bool isBlasRoot = false;
 
+    int64_t device_offset;
+
     float worldToObject_tMultiplier;
     GEN_RT_BVH_INSTANCE_LEAF instanceLeaf;
     float4x4 worldToObjectMatrix;

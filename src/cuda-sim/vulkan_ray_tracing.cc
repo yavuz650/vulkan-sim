@@ -145,6 +145,202 @@ warp_intersection_table *** VulkanRayTracing::intersection_table;
 warp_intersection_table *** VulkanRayTracing::anyhit_table;
 IntersectionTableType VulkanRayTracing::intersectionTableType = IntersectionTableType::Baseline;
 
+
+bool debugPrefetcher = false;
+bool debugTransactions = false;
+bool debugClosestHits = false;
+bool debugEliminations = false;
+uint8_t stack_trend = 0;
+uint8_t num_of_prefetches = 0;
+void push_ts_trend (std::list<StackEntry> &stack)
+{
+    if (stack_trend != 0) { stack_trend = 0; }
+
+    if (debugPrefetcher)
+    {
+        FILE *statfout = fopen("prefetch_addresses.txt", "a");
+        fprintf(statfout, "Event-PUSH: stack_trend=%d\n", stack_trend);
+        fprintf(statfout, "Address: ");
+        for (std::list<StackEntry>::iterator it = stack.begin(); it != stack.end(); ++it)
+        {
+            int64_t device_offset = it->device_offset;
+            uint8_t* device_prefetch_addr = (uint8_t*)((uint64_t)it->addr + device_offset);
+            fprintf(statfout, "%p (%p)\t", static_cast<void*>(it->addr), static_cast<void*>(device_prefetch_addr));
+        }
+        fprintf(statfout, "\n");
+        fflush(statfout); fclose(statfout);
+    }
+}
+
+void push_ts_trend (std::deque<StackEntry> &stack)
+{
+    if (stack_trend != 0) { stack_trend = 0; }
+
+    if (debugPrefetcher)
+    {
+        FILE *statfout = fopen("prefetch_addresses.txt", "a");
+        fprintf(statfout, "Event-PUSH: stack_trend=%d\n", stack_trend);
+        fprintf(statfout, "Address: ");
+        for (std::deque<StackEntry>::iterator it = stack.begin(); it != stack.end(); ++it)
+        {
+            int64_t device_offset = it->device_offset;
+            uint8_t* device_prefetch_addr = (uint8_t*)((uint64_t)it->addr + device_offset);
+            fprintf(statfout, "%p (%p)\t", static_cast<void*>(it->addr), static_cast<void*>(device_prefetch_addr));
+        }
+        fprintf(statfout, "\n");
+        fflush(statfout); fclose(statfout);
+    }
+}
+
+uint8_t pop_ts_trend(std::list<StackEntry> &stack, bool is_BFS_based_traversal)
+{
+    uint8_t prefetches = 0;
+
+    if (stack_trend != 3) { stack_trend++; }
+
+    if (is_BFS_based_traversal)
+    {
+        if (stack_trend == 3) { prefetches = 16; }
+        if (stack_trend == 2) { prefetches = 2; }
+        if (stack_trend == 1) { prefetches = 1; }
+    }
+    else
+    {
+        if (stack_trend == 3) { prefetches = 16; }
+        if (stack_trend == 2) { prefetches = 2; }
+        if (stack_trend == 1) { prefetches = 1; }
+    }
+
+    if (debugPrefetcher)
+    {
+        FILE *statfout = fopen("prefetch_addresses.txt", "a");
+        fprintf(statfout, "Event-POP: stack_trend=%d, stack_size=%d, num_of_prefetches=%d\n", stack_trend, stack.size(), prefetches);
+        fprintf(statfout, "Address: ");
+        for (std::list<StackEntry>::iterator it = stack.begin(); it != stack.end(); ++it)
+        {
+            int64_t device_offset = it->device_offset;
+            uint8_t* device_prefetch_addr = (uint8_t*)((uint64_t)it->addr + device_offset);
+            fprintf(statfout, "%p (%p)\t", static_cast<void*>(it->addr), static_cast<void*>(device_prefetch_addr));
+        }
+        fprintf(statfout, "\n");
+        fflush(statfout); fclose(statfout);
+    }
+
+    return prefetches;
+}
+
+uint8_t pop_ts_trend(std::deque<StackEntry> &stack, bool is_BFS_based_traversal)
+{
+    uint8_t prefetches = 0;
+
+    if (stack_trend != 3) { stack_trend++; }
+
+    if (is_BFS_based_traversal)
+    {
+        if (stack_trend == 3) { prefetches = 16; }
+        if (stack_trend == 2) { prefetches = 2; }
+        if (stack_trend == 1) { prefetches = 1; }
+    }
+    else
+    {
+        if (stack_trend == 3) { prefetches = 16; }
+        if (stack_trend == 2) { prefetches = 2; }
+        if (stack_trend == 1) { prefetches = 1; }
+    }
+
+    if (debugPrefetcher)
+    {
+        FILE *statfout = fopen("prefetch_addresses.txt", "a");
+        fprintf(statfout, "Event-POP: stack_trend=%d, stack_size=%d, num_of_prefetches=%d\n", stack_trend, stack.size(), prefetches);
+        fprintf(statfout, "Address: ");
+        for (std::deque<StackEntry>::iterator it = stack.begin(); it != stack.end(); ++it)
+        {
+            int64_t device_offset = it->device_offset;
+            uint8_t* device_prefetch_addr = (uint8_t*)((uint64_t)it->addr + device_offset);
+            fprintf(statfout, "%p (%p)\t", static_cast<void*>(it->addr), static_cast<void*>(device_prefetch_addr));
+        }
+        fprintf(statfout, "\n");
+        fflush(statfout); fclose(statfout);
+    }
+
+    return prefetches;
+}
+
+bool addressExistsinTransactions(const std::vector<MemoryTransactionRecord>& transactions, void* address) {
+    int max_distance = 16;
+    int i = 0;
+    for (const auto& transaction : transactions) {
+        //if (i > (transactions.size() - max_distance))
+            if (transaction.address == address) {
+                return true;
+            }
+        i++;
+    }
+    return false;
+}
+
+void generate_prefetches(std::list<StackEntry> &stack, std::vector<MemoryTransactionRecord>& transactions, uint8_t& num_of_prefetches)
+{
+    for (std::list<StackEntry>::reverse_iterator it = stack.rbegin(); it != stack.rend(); ++it)
+    {
+        if (num_of_prefetches > 0)
+        {
+            uint8_t* prefetch_addr = it->addr;
+            bool prefetch_topLevel = it->topLevel;
+            bool prefetch_leaf = it->leaf;
+            int64_t prefetch_device_offset = it->device_offset;
+
+            uint8_t* device_prefetch_addr = (uint8_t*)((uint64_t)prefetch_addr + prefetch_device_offset);
+
+            //if (!(addressExistsinTransactions(transactions, device_prefetch_addr)))
+            {
+                if (debugPrefetcher)
+                {
+                    FILE *statfout = fopen("prefetch_addresses.txt", "a");
+                    fprintf(statfout, "Prefetch: pos=%d, prefetch_addr=%p, prefetch_topLevel=%d, prefetch_leaf=%d, device_prefetch_addr=%p\n", num_of_prefetches, (void *)prefetch_addr, prefetch_topLevel, prefetch_leaf, (void *)device_prefetch_addr);
+                    fflush(statfout);
+                    fclose(statfout);
+                }
+                
+                int existing_prefetches = 0;
+                for (const auto& transaction : transactions) {
+                    if (transaction.is_prefetch_load == true) {
+                        existing_prefetches++;
+                    }
+                }
+                
+                //if (existing_prefetches < 2)
+                {
+                    // TLAS INTERNAL - BVH_INTERNAL_NODE
+                    if (prefetch_topLevel == true && prefetch_leaf == false)
+                    {
+                        transactions.push_back(MemoryTransactionRecord(device_prefetch_addr, GEN_RT_BVH_INTERNAL_NODE_length * 4, TransactionType::BVH_INTERNAL_NODE, true));
+                    }
+                    // BLAS INTERNAL - BVH_INTERNAL_NODE
+                    else if (prefetch_topLevel == false && prefetch_leaf == false)
+                    {
+                        transactions.push_back(MemoryTransactionRecord(device_prefetch_addr, GEN_RT_BVH_INTERNAL_NODE_length * 4, TransactionType::BVH_INTERNAL_NODE, true));
+                    }
+                    // TLAS LEAF - BVH_INSTANCE_LEAF
+                    else if (prefetch_topLevel == true && prefetch_leaf == true)
+                    {
+                        transactions.push_back(MemoryTransactionRecord(device_prefetch_addr, GEN_RT_BVH_INSTANCE_LEAF_length * 4, TransactionType::BVH_INSTANCE_LEAF, true));
+                    }
+                    // BLAS LEAF - BVH_PRIMITIVE_LEAF_DESCRIPTOR
+
+                    // (anshul) Comment this if you want to skip BLAS leaf nodes from prefetching (because of low data reuse)
+                    else if (prefetch_topLevel == false && prefetch_leaf == true)
+                    {
+                        transactions.push_back(MemoryTransactionRecord(device_prefetch_addr, GEN_RT_BVH_INTERNAL_NODE_length * 4, TransactionType::BVH_PRIMITIVE_LEAF_DESCRIPTOR, true));
+                    }
+                }
+            }
+            num_of_prefetches--;
+        }
+    }
+}
+
+
 float get_norm(float4 v)
 {
     return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z + v.w * v.w);
@@ -540,6 +736,7 @@ void VulkanRayTracing::parentPointerPass(VkAccelerationStructureKHR _topLevelAS,
 
     uint8_t* topRootAddr = (uint8_t*)_topLevelAS + topBVH.RootNodeOffset;
     stack.push_back(StackEntry(topRootAddr, true, false, GEN_RT_BVH_INTERNAL_NODE_length * 4));
+    push_ts_trend(stack);
     parent_map[topRootAddr] = StackEntry((uint8_t*)_topLevelAS, true, false, GEN_RT_BVH_length * 4);
     node_info[topRootAddr] = StackEntry(topRootAddr, true, false, GEN_RT_BVH_INTERNAL_NODE_length * 4);
     parent_map_device_offset[topRootAddr + device_offset] = StackEntry((uint8_t*)_topLevelAS + device_offset, true, false, GEN_RT_BVH_length * 4);
@@ -857,6 +1054,7 @@ void VulkanRayTracing::createTreelets(VkAccelerationStructureKHR _topLevelAS, in
 
     uint8_t* topRootAddr = (uint8_t*)_topLevelAS + topBVH.RootNodeOffset;
     stack.push_back(StackEntry(topRootAddr, true, false, GEN_RT_BVH_INTERNAL_NODE_length * 4));
+    push_ts_trend(stack);
     sah_stack.push_back(1.0); // placeholder
     nodesize_stack.push_back(GEN_RT_BVH_INTERNAL_NODE_length * 4);
     tree_level_map[topRootAddr] = 1;
@@ -925,6 +1123,7 @@ void VulkanRayTracing::createTreelets(VkAccelerationStructureKHR _topLevelAS, in
                         {
                             assert(node.ChildType[i] == NODE_TYPE_INSTANCE); // top level leaf
                             stack.push_back(StackEntry(child_addr, true, true, GEN_RT_BVH_INSTANCE_LEAF_length * 4));
+                            push_ts_trend(stack);
                             nodesize_stack.push_back(GEN_RT_BVH_INSTANCE_LEAF_length * 4 + GEN_RT_BVH_length * 4); // reason for adding GEN_RT_BVH_length * 4 is because the 2 nodes are traversed back to back
                             assert(tree_level_map.find(node_addr) != tree_level_map.end());
                             tree_level_map[child_addr] = tree_level_map[node_addr] + 1;
@@ -932,6 +1131,7 @@ void VulkanRayTracing::createTreelets(VkAccelerationStructureKHR _topLevelAS, in
                         else
                         {
                             stack.push_back(StackEntry(child_addr, true, false, GEN_RT_BVH_INTERNAL_NODE_length * 4));
+                            push_ts_trend(stack);
                             nodesize_stack.push_back(GEN_RT_BVH_INTERNAL_NODE_length * 4);
                             assert(tree_level_map.find(node_addr) != tree_level_map.end());
                             tree_level_map[child_addr] = tree_level_map[node_addr] + 1;
@@ -986,6 +1186,7 @@ void VulkanRayTracing::createTreelets(VkAccelerationStructureKHR _topLevelAS, in
 
                 uint8_t * botLevelRootAddr = ((uint8_t *)(leaf_addr + instanceLeaf.BVHAddress)) + botLevelASAddr.RootNodeOffset;
                 stack.push_back(StackEntry(botLevelRootAddr, false, false, GEN_RT_BVH_INTERNAL_NODE_length * 4));
+                push_ts_trend(stack);
                 sah_stack.push_back(1.0);
                 nodesize_stack.push_back(GEN_RT_BVH_INTERNAL_NODE_length * 4);
                 assert(tree_level_map.find(leaf_addr) != tree_level_map.end());
@@ -1057,6 +1258,7 @@ void VulkanRayTracing::createTreelets(VkAccelerationStructureKHR _topLevelAS, in
                             //stack.push_back(StackEntry(child_addr, false, true, GEN_RT_BVH_PRIMITIVE_LEAF_DESCRIPTOR_length * 4 + GEN_RT_BVH_length * 4));
                             //nodesize_stack.push_back(GEN_RT_BVH_PRIMITIVE_LEAF_DESCRIPTOR_length * 4 + GEN_RT_BVH_length * 4); // reason for adding GEN_RT_BVH_length * 4 is because the 2 nodes are traversed back to back
                             stack.push_back(StackEntry(child_addr, false, true, GEN_RT_BVH_length * 4));
+                            push_ts_trend(stack);
                             nodesize_stack.push_back(GEN_RT_BVH_length * 4); // both leaf descriptor and quad/procedural leaf use the same addresss
                             assert(tree_level_map.find(node_addr) != tree_level_map.end());
                             tree_level_map[child_addr] = tree_level_map[node_addr] + 1;
@@ -1064,6 +1266,7 @@ void VulkanRayTracing::createTreelets(VkAccelerationStructureKHR _topLevelAS, in
                         else
                         {
                             stack.push_back(StackEntry(child_addr, false, false, GEN_RT_BVH_INTERNAL_NODE_length * 4));
+                            push_ts_trend(stack);
                             nodesize_stack.push_back(GEN_RT_BVH_INTERNAL_NODE_length * 4);
                             assert(tree_level_map.find(node_addr) != tree_level_map.end());
                             tree_level_map[child_addr] = tree_level_map[node_addr] + 1;
@@ -1195,6 +1398,7 @@ void VulkanRayTracing::createTreelets(VkAccelerationStructureKHR _topLevelAS, in
                 nodesize_stack.clear();
 
                 stack.push_back(treelet_roots_pending_work_queue.front());
+                push_ts_trend(stack);
                 sah_stack.push_back(treelet_roots_pending_work_queue_sah.front());
                 nodesize_stack.push_back(treelet_roots_pending_work_queue_nodesize.front());
 
@@ -1263,6 +1467,7 @@ void VulkanRayTracing::createTreelets(VkAccelerationStructureKHR _topLevelAS, in
                 nodesize_stack.clear();
 
                 stack.push_back(treelet_roots_pending_work_queue.front());
+                push_ts_trend(stack);
                 sah_stack.push_back(treelet_roots_pending_work_queue_sah.front());
                 nodesize_stack.push_back(treelet_roots_pending_work_queue_nodesize.front());
             }
@@ -2479,8 +2684,10 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
         hi.z = topBVH.BoundsMax.Z;
 
         float thit;
-        if(ray_box_test(lo, hi, calculate_idir(ray.get_direction()), ray.get_origin(), ray.get_tmin(), ray.get_tmax(), thit))
+        if(ray_box_test(lo, hi, calculate_idir(ray.get_direction()), ray.get_origin(), ray.get_tmin(), ray.get_tmax(), thit)) {
             stack.push_back(StackEntry(topRootAddr, true, false));
+            push_ts_trend(stack);
+        }
     }
 
     while (!stack.empty())
@@ -2495,6 +2702,9 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
         {
             next_node_addr = stack.back().addr;
             stack.pop_back();
+            num_of_prefetches = pop_ts_trend(stack, 0);
+            if (GPGPU_Context()->the_gpgpusim->g_the_gpu->get_config().is_stack_trend_prefetch())
+                generate_prefetches(stack, transactions, num_of_prefetches);
         }
 
         while (next_node_addr > 0)
@@ -2565,6 +2775,7 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
                     {
                         assert(node.ChildType[i] == NODE_TYPE_INSTANCE);
                         stack.push_back(StackEntry(child_addr, true, true));
+                        push_ts_trend(stack);
                         assert(tree_level_map.find(node_addr) != tree_level_map.end());
                         tree_level_map[child_addr] = tree_level_map[node_addr] + 1;
                     }
@@ -2577,6 +2788,7 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
                         }
                         else {
                             stack.push_back(StackEntry(child_addr, true, false));
+                            push_ts_trend(stack);
                             assert(tree_level_map.find(node_addr) != tree_level_map.end());
                             tree_level_map[child_addr] = tree_level_map[node_addr] + 1;
                         }
@@ -2608,6 +2820,9 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
 
             uint8_t* leaf_addr = stack.back().addr;
             stack.pop_back();
+            num_of_prefetches = pop_ts_trend(stack, 0);
+            if (GPGPU_Context()->the_gpgpusim->g_the_gpu->get_config().is_stack_trend_prefetch())
+                generate_prefetches(stack, transactions, num_of_prefetches);
 
             GEN_RT_BVH_INSTANCE_LEAF instanceLeaf;
             GEN_RT_BVH_INSTANCE_LEAF_unpack(&instanceLeaf, leaf_addr);
@@ -2664,6 +2879,7 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
             
             botLevelRootAddr = ((uint8_t *)((uint64_t)leaf_addr + instanceLeaf.BVHAddress)) + botLevelASAddr.RootNodeOffset;
             stack.push_back(StackEntry(botLevelRootAddr, false, false));
+            push_ts_trend(stack);
             assert(tree_level_map.find(leaf_addr) != tree_level_map.end());
             tree_level_map[botLevelRootAddr] = tree_level_map[leaf_addr];
 
@@ -2681,7 +2897,9 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
                 uint8_t* node_addr = NULL;
                 uint8_t* next_node_addr = stack.back().addr;
                 stack.pop_back();
-                
+                num_of_prefetches = pop_ts_trend(stack, 0);
+                if (GPGPU_Context()->the_gpgpusim->g_the_gpu->get_config().is_stack_trend_prefetch())
+                    generate_prefetches(stack, transactions, num_of_prefetches);
 
                 // traverse bottom level internal nodes
                 while (next_node_addr > 0)
@@ -2752,6 +2970,7 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
                             if(node.ChildType[i] != NODE_TYPE_INTERNAL)
                             {
                                 stack.push_back(StackEntry(child_addr, false, true));
+                                push_ts_trend(stack);
                                 assert(tree_level_map.find(node_addr) != tree_level_map.end());
                                 tree_level_map[child_addr] = tree_level_map[node_addr] + 1;
                             }
@@ -2764,6 +2983,7 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
                                 }
                                 else {
                                     stack.push_back(StackEntry(child_addr, false, false));
+                                    push_ts_trend(stack);
                                     assert(tree_level_map.find(node_addr) != tree_level_map.end());
                                     tree_level_map[child_addr] = tree_level_map[node_addr] + 1;
                                 }
@@ -2790,6 +3010,10 @@ void VulkanRayTracing::traceRay(VkAccelerationStructureKHR _topLevelAS,
                 {
                     uint8_t* leaf_addr = stack.back().addr;
                     stack.pop_back();
+                    num_of_prefetches = pop_ts_trend(stack, 0);
+                    if (GPGPU_Context()->the_gpgpusim->g_the_gpu->get_config().is_stack_trend_prefetch())
+                        generate_prefetches(stack, transactions, num_of_prefetches);
+                    
                     struct GEN_RT_BVH_PRIMITIVE_LEAF_DESCRIPTOR leaf_descriptor;
                     GEN_RT_BVH_PRIMITIVE_LEAF_DESCRIPTOR_unpack(&leaf_descriptor, leaf_addr);
                     if (remap_to_treelet_layout) {

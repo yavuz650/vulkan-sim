@@ -313,11 +313,12 @@ typedef struct ImageMemoryTransactionRecord {
 } ImageMemoryTransactionRecord;
 
 typedef struct MemoryTransactionRecord {
-    MemoryTransactionRecord(void* address, uint32_t size, TransactionType type)
+    MemoryTransactionRecord(void* address, uint32_t size, TransactionType type, bool is_prefetch_load=false)
     : address(address), size(size), type(type) {}
     void* address;
     uint32_t size;
     TransactionType type;
+    bool is_prefetch_load;
 } MemoryTransactionRecord;
 
 typedef struct MemoryStoreTransactionRecord {

@@ -415,6 +415,8 @@ class gpgpu_sim_config : public power_config,
 
   bool flush_l1() const { return gpgpu_flush_l1_cache; }
 
+  bool is_stack_trend_prefetch() const { return stack_trend_prefetch; }
+
   int max_treelet_size;
 
   bool get_treelet_based_traversal() const { return treelet_based_traversal; }
@@ -441,6 +443,7 @@ class gpgpu_sim_config : public power_config,
 
   // GPGPU-Sim timing model options
   bool treelet_based_traversal;
+  bool stack_trend_prefetch;
   bool gpu_intermittent_stats;
   int gpu_intermittent_stats_freq;
   unsigned long long gpu_max_cycle_opt;
