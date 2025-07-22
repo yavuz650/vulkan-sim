@@ -40,7 +40,7 @@
 const char *cache_request_status_str(enum cache_request_status status) {
   static const char *static_cache_request_status_str[] = {
       "HIT",         "HIT_RESERVED", "MISS", "RESERVATION_FAIL",
-      "SECTOR_MISS", "MSHR_HIT"};
+      "SECTOR_MISS", "PREFETCH_HIT", "MSHR_HIT"};
 
   assert(sizeof(static_cache_request_status_str) / sizeof(const char *) ==
          NUM_CACHE_REQUEST_STATUS);
@@ -363,6 +363,8 @@ enum cache_request_status tag_array::access(new_addr_type addr, unsigned time,
                            m_lines[idx]->get_modified_size(),
                            m_lines[idx]->get_dirty_byte_mask(),
                            m_lines[idx]->get_dirty_sector_mask());
+          evicted.m_prefetched = m_lines[idx]->m_prefetched;
+          evicted.m_accessed = m_lines[idx]->m_accessed;
           m_dirty--;
         }
         m_lines[idx]->allocate(m_config.tag(addr), m_config.block_addr(addr),
@@ -397,14 +399,14 @@ enum cache_request_status tag_array::access(new_addr_type addr, unsigned time,
 }
 
 void tag_array::fill(new_addr_type addr, unsigned time, mem_fetch *mf,
-                     bool is_write) {
+                     bool is_write, bool is_prefetched) {
   fill(addr, time, mf->get_access_sector_mask(), mf->get_access_byte_mask(),
-       is_write, mf);
+       is_write, mf, is_prefetched);
 }
 
 void tag_array::fill(new_addr_type addr, unsigned time,
                      mem_access_sector_mask_t mask,
-                     mem_access_byte_mask_t byte_mask, bool is_write, mem_fetch *mf) {
+                     mem_access_byte_mask_t byte_mask, bool is_write, mem_fetch *mf, bool is_prefetched) {
   // assert( m_config.m_alloc_policy == ON_FILL );
   unsigned idx;
   enum cache_request_status status = probe(addr, idx, mask, is_write);
@@ -488,6 +490,7 @@ void tag_array::fill(new_addr_type addr, unsigned time,
   }
   before = m_lines[idx]->is_modified_line();
   m_lines[idx]->fill(time, mask, byte_mask, mf);
+  m_lines[idx]->m_prefetched=is_prefetched;
   if (m_lines[idx]->is_modified_line() && !before) {
     m_dirty++;
   }
@@ -512,10 +515,11 @@ void tag_array::fill(new_addr_type addr, unsigned time,
   }
 }
 
-void tag_array::fill(unsigned index, unsigned time, mem_fetch *mf) {
+void tag_array::fill(unsigned index, unsigned time, mem_fetch *mf, bool is_prefetched) {
   assert(m_config.m_alloc_policy == ON_MISS);
   bool before = m_lines[index]->is_modified_line();
   m_lines[index]->fill(time, mf->get_access_sector_mask(), mf->get_access_byte_mask(), mf);
+  m_lines[index]->m_prefetched=is_prefetched;
   if (m_lines[index]->is_modified_line() && !before) {
     m_dirty++;
   }
@@ -749,6 +753,9 @@ cache_stats::cache_stats() {
   m_cache_port_available_cycles = 0;
   m_cache_data_port_busy_cycles = 0;
   m_cache_fill_port_busy_cycles = 0;
+
+  m_num_prefetched = 0;
+  m_num_unused_prefetched = 0;
 }
 
 void cache_stats::clear() {
@@ -902,6 +909,10 @@ cache_stats &cache_stats::operator+=(const cache_stats &cs) {
   #ifdef DETAILED_CACHE_STATS
   g_rt_miss += cs.g_rt_miss;
   g_rt_cold_miss += cs.g_rt_cold_miss;
+
+  m_num_prefetched += cs.m_num_prefetched;
+  m_num_unused_prefetched += cs.m_num_unused_prefetched;
+
   for (unsigned status = 0; status < NUM_CACHE_REQUEST_STATUS; ++status) {
     g_rt_cache_stats[status] += cs.g_rt_cache_stats[status];
     g_rt_cache_write_stats[status] += cs.g_rt_cache_write_stats[status];
@@ -947,6 +958,13 @@ void cache_stats::print_stats(FILE *fout, const char *cache_name) const {
   fprintf(fout, "RT_%s:\n", m_cache_name.c_str());
   fprintf(fout, "\trt_read_cold_miss = %d\n", g_rt_cold_miss);
   fprintf(fout, "\trt_read_other_miss = %d\n", g_rt_miss);
+
+  unsigned long long g_rt_total_misses = g_rt_cache_stats[MISS] + g_rt_cache_stats[SECTOR_MISS];
+  fprintf(fout, "\trt_total_misses = %d\n", g_rt_total_misses);
+  fprintf(fout, "\tm_num_prefetched = %d\n", m_num_prefetched);
+  fprintf(fout, "\tm_num_unused_prefetched = %d\n", m_num_unused_prefetched);
+  fprintf(fout, "\taccuracy = %.4f\n", (float)(m_num_prefetched - m_num_unused_prefetched)*100/(m_num_prefetched));
+  fprintf(fout, "\tcoverage = %.4f\n", (float)(m_num_prefetched - m_num_unused_prefetched)*100/(g_rt_total_misses));
 
   unsigned total_misses = 0;
   unsigned total_accesses = 0;
@@ -1256,11 +1274,15 @@ void baseline_cache::fill(mem_fetch *mf, unsigned time) {
   if (mf->isprefetch())
     mf->set_prefetch_fill_cycle(GPGPU_Context()->the_gpgpusim->g_the_gpu->gpu_sim_cycle + GPGPU_Context()->the_gpgpusim->g_the_gpu->gpu_tot_sim_cycle);
   if (m_config.m_alloc_policy == ON_MISS)
-    m_tag_array->fill(e->second.m_cache_index, time, mf);
+    m_tag_array->fill(e->second.m_cache_index, time, mf, mf->is_prefetched());
   else if (m_config.m_alloc_policy == ON_FILL) {
-    m_tag_array->fill(e->second.m_block_addr, time, mf, mf->is_write());
+    m_tag_array->fill(e->second.m_block_addr, time, mf, mf->is_write(), mf->is_prefetched());
   } else
     abort();
+  
+  if(mf->is_prefetched()){
+    m_stats.m_num_prefetched++;
+  }
   bool has_atomic = false;
   m_mshrs.mark_ready(e->second.m_block_addr, has_atomic);
   if (has_atomic) {
@@ -1548,6 +1570,7 @@ enum cache_request_status data_cache::wr_miss_wa_naive(
           evicted.m_byte_mask, evicted.m_sector_mask, evicted.m_modified_size,
           true, m_gpu->gpu_tot_sim_cycle + m_gpu->gpu_sim_cycle, -1, -1, -1,
           NULL);
+      if (evicted.m_prefetched) { wb->set_prefetch_flag(); }
       // the evicted block may have wrong chip id when advanced L2 hashing  is
       // used, so set the right chip address from the original mf
       wb->set_chip(mf->get_tlx_addr().chip);
@@ -1814,6 +1837,10 @@ enum cache_request_status data_cache::rd_miss_base(
   evicted_block_info evicted;
   mshr_merge = send_read_request(addr, block_addr, cache_index, mf, time, do_miss, wb,
                     evicted, events, false, false);
+  
+  if(evicted.m_prefetched && !evicted.m_accessed) {
+    m_stats.m_num_unused_prefetched++;
+  }
 
   if (do_miss) {
     // If evicted block is modified and not a write-through
@@ -2140,6 +2167,15 @@ enum cache_request_status data_cache::access(new_addr_type addr, mem_fetch *mf,
     else {
       m_stats.g_rt_cache_stats[access_outcome]++;
 
+      if(access_status == HIT)
+      {
+        if(m_tag_array->get_block(cache_index)->m_prefetched)
+        {
+          m_tag_array->get_block(cache_index)->m_accessed = true;
+          m_stats.g_rt_cache_stats[PREFETCH_HIT]++;
+        }
+      }
+
       // Classify misses
       if (access_outcome == MISS) {
         // Check if cold start
@@ -2150,6 +2186,19 @@ enum cache_request_status data_cache::access(new_addr_type addr, mem_fetch *mf,
         else {
           m_stats.g_rt_miss++;
         }
+      }
+    }
+  }
+  else
+  {
+    // Prefetcher Addition //
+    // If in future there is a prefetcher added to not just ray tracing //
+    if(access_status == HIT)
+    {
+      if(m_tag_array->get_block(cache_index)->m_prefetched)
+      {
+        m_tag_array->get_block(cache_index)->m_accessed = true;
+        m_stats.inc_stats(mf->get_access_type(), PREFETCH_HIT);
       }
     }
   }

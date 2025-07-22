@@ -1979,6 +1979,9 @@ class shader_core_config : public core_config {
   char * m_rt_coherence_engine_config_str;
   ray_coherence_config m_rt_coherence_engine_config;
   bool bypassL0Complet;
+  bool bypassL1forPrefetches;
+  bool bypassL1forNonRTloads;
+  bool prefetch_only_BLAS;
   unsigned m_rt_intersection_table_type;
   bool m_treelet_prefetch;
   unsigned m_treelet_prefetch_heuristic;

@@ -75,6 +75,7 @@ mem_fetch::mem_fetch(const mem_access_t &access, const warp_inst_t *inst,
   }
   m_israytrace = false;
   m_isprefetch = false;
+  m_prefetched = false;
   m_prefetch_generation_cycle = 0;
   m_prefetch_issue_cycle = 0;
   m_prefetch_fill_cycle = 0;

@@ -142,6 +142,9 @@ class mem_fetch {
 
   unsigned get_num_flits(bool simt_to_mem);
 
+  void set_prefetch_flag() { m_prefetched=true; }
+  bool is_prefetched() { return m_prefetched; }
+
   mem_fetch *get_original_mf() { return original_mf; }
   mem_fetch *get_original_wr_mf() { return original_wr_mf; }
 
@@ -193,6 +196,8 @@ class mem_fetch {
   const memory_config *m_mem_config;
   unsigned icnt_flit_size;
 
+  bool m_prefetched;
+  
   mem_fetch
       *original_mf;  // this pointer is set up when a request is divided into
                      // sector requests at L2 cache (if the req size > L2 sector

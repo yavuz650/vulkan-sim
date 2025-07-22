@@ -50,6 +50,7 @@ enum cache_request_status {
   MISS,
   RESERVATION_FAIL,
   SECTOR_MISS,
+  PREFETCH_HIT,
   MSHR_HIT,
   NUM_CACHE_REQUEST_STATUS
 };
@@ -73,17 +74,22 @@ enum cache_event_type {
 struct evicted_block_info {
   new_addr_type m_block_addr;
   unsigned m_modified_size;
+  bool    m_prefetched;
+  bool    m_accessed;
   mem_access_byte_mask_t m_byte_mask;
   mem_access_sector_mask_t m_sector_mask;
   evicted_block_info() {
     m_block_addr = 0;
     m_modified_size = 0;
+    m_prefetched=false;
     m_byte_mask.reset();
     m_sector_mask.reset();
   }
   void set_info(new_addr_type block_addr, unsigned modified_size) {
     m_block_addr = block_addr;
     m_modified_size = modified_size;
+    m_prefetched=false;
+    m_accessed=false;
   }
   void set_info(new_addr_type block_addr, unsigned modified_size,
                 mem_access_byte_mask_t byte_mask,
@@ -152,6 +158,8 @@ struct cache_block_t {
   cache_block_t() {
     m_tag = 0;
     m_block_addr = 0;
+    m_prefetched=false;
+    m_accessed=false;
   }
 
   virtual void allocate(new_addr_type tag, new_addr_type block_addr,
@@ -198,6 +206,9 @@ struct cache_block_t {
 
   new_addr_type m_tag;
   new_addr_type m_block_addr;
+
+  bool    m_prefetched;
+  bool    m_accessed;
 };
 
 struct line_cache_block : public cache_block_t {
@@ -1041,9 +1052,9 @@ class tag_array {
                                    unsigned &idx, bool &wb,
                                    evicted_block_info &evicted, mem_fetch *mf);
 
-  void fill(new_addr_type addr, unsigned time, mem_fetch *mf, bool is_write);
-  void fill(unsigned idx, unsigned time, mem_fetch *mf);
-  void fill(new_addr_type addr, unsigned time, mem_access_sector_mask_t mask, mem_access_byte_mask_t byte_mask, bool is_write, mem_fetch *mf = nullptr);
+  void fill(new_addr_type addr, unsigned time, mem_fetch *mf, bool is_write, bool is_prefetched=false);
+  void fill(unsigned idx, unsigned time, mem_fetch *mf, bool is_prefetched=false);
+  void fill(new_addr_type addr, unsigned time, mem_access_sector_mask_t mask, mem_access_byte_mask_t byte_mask, bool is_write, mem_fetch *mf = nullptr, bool is_prefetched=false);
 
   unsigned size() const { return m_config.get_num_lines(); }
   cache_block_t *get_block(unsigned idx) { return m_lines[idx]; }
@@ -1179,6 +1190,11 @@ struct cache_sub_stats {
   unsigned long long pending_hits;
   unsigned long long res_fails;
 
+  unsigned prefetch_access;
+  unsigned prefetch_misses;
+  unsigned num_prefetched;
+  unsigned num_unused_prefetched;
+
   unsigned long long port_available_cycles;
   unsigned long long data_port_busy_cycles;
   unsigned long long fill_port_busy_cycles;
@@ -1192,6 +1208,10 @@ struct cache_sub_stats {
     port_available_cycles = 0;
     data_port_busy_cycles = 0;
     fill_port_busy_cycles = 0;
+    prefetch_access = 0;
+    prefetch_misses = 0;
+    num_prefetched = 0;
+    num_unused_prefetched=0;
   }
   cache_sub_stats &operator+=(const cache_sub_stats &css) {
     ///
@@ -1201,6 +1221,12 @@ struct cache_sub_stats {
     misses += css.misses;
     pending_hits += css.pending_hits;
     res_fails += css.res_fails;
+
+    prefetch_access += css.prefetch_access;
+    prefetch_misses += css.prefetch_misses;
+    num_prefetched += css.num_prefetched;
+    num_unused_prefetched += css.num_unused_prefetched;
+
     port_available_cycles += css.port_available_cycles;
     data_port_busy_cycles += css.data_port_busy_cycles;
     fill_port_busy_cycles += css.fill_port_busy_cycles;
@@ -1216,6 +1242,12 @@ struct cache_sub_stats {
     ret.misses = misses + cs.misses;
     ret.pending_hits = pending_hits + cs.pending_hits;
     ret.res_fails = res_fails + cs.res_fails;
+
+    ret.prefetch_access = prefetch_access + cs.prefetch_access;
+    ret.prefetch_misses = prefetch_misses + cs.prefetch_misses;
+    ret.num_prefetched = num_prefetched + cs.num_prefetched;
+    ret.num_unused_prefetched = num_unused_prefetched + cs.num_unused_prefetched;
+
     ret.port_available_cycles =
         port_available_cycles + cs.port_available_cycles;
     ret.data_port_busy_cycles =
@@ -1326,6 +1358,9 @@ class cache_stats {
   unsigned g_rt_miss = 0;
   unsigned g_rt_cache_stats[NUM_CACHE_REQUEST_STATUS] = {};
   unsigned g_rt_cache_write_stats[NUM_CACHE_REQUEST_STATUS] = {};
+
+  unsigned m_num_prefetched;
+  unsigned m_num_unused_prefetched;
 
  private:
   bool check_valid(int type, int status) const;

@@ -2627,7 +2627,7 @@ bool ldst_unit::memory_cycle(warp_inst_t &inst,
   const mem_access_t &access = inst.accessq_back();
 
   bool bypassL1D = false;
-  if (CACHE_GLOBAL == inst.cache_op || (m_L1D == NULL)) {
+  if (CACHE_GLOBAL == inst.cache_op || (m_L1D == NULL) || m_config->bypassL1forNonRTloads) {
     bypassL1D = true;
   } else if (inst.space.is_global()) {  // global memory access
     // skip L1 cache if the option is enabled
@@ -3299,7 +3299,7 @@ void rt_unit::cycle() {
       }
                             
       // Update cache
-      if (!m_config->bypassL0Complet) {
+      if (!(m_config->bypassL0Complet || (mf->is_prefetched() && m_config->bypassL1forPrefetches))) {
         if (m_config->m_rt_use_l1d) {
           L1D->fill( mf, m_core->get_gpu()->gpu_sim_cycle +
                           m_core->get_gpu()->gpu_tot_sim_cycle);
@@ -4076,6 +4076,7 @@ void rt_unit::cycle() {
     if (m_current_warps.find(mem_access_q_warp_uid) == m_current_warps.end()) {
       printf("Memory chunk original warp not found (w_uid: %d); erasing memory accesses starting with 0x%x.\n", mem_access_q_warp_uid, mem_access_q.front().first);
       mem_access_q.clear();
+      prefetch_mem_access_q.clear();
       if (mem_store_q.empty()) {
         schedule_next_warp(rt_inst);
       }
@@ -4261,7 +4262,7 @@ void rt_unit::process_memory_response(mem_fetch* mf, warp_inst_t &pipe_reg) {
     } 
     
     // If not coalescing warps
-    else if (!m_config->bypassL0Complet){
+    else if (!(m_config->bypassL0Complet || (mf->is_prefetched() && m_config->bypassL1forPrefetches))){
       // Check MSHR for all accessed to this address
       std::list<mem_fetch *> response_mf;
       if (m_config->m_rt_use_l1d) {
@@ -4691,7 +4692,7 @@ mem_fetch* rt_unit::process_memory_access_queue(warp_inst_t &inst) {
     next_access = m_ray_coherence_engine->get_next_access();
   }
   else {
-    next_access = inst.get_next_rt_mem_transaction();
+    next_access = inst.get_next_rt_mem_transaction(prefetch_mem_access_q);
   }
 
   // // Tor's suggestion for the map from treelet ID to sequence ID
@@ -4862,7 +4863,7 @@ void rt_unit::process_cache_access(baseline_cache *cache, warp_inst_t &inst, mem
   enum cache_request_status status;
   std::list<cache_event> events;
       
-  if (m_config->bypassL0Complet) {
+  if (m_config->bypassL0Complet || (mf->is_prefetched() && m_config->bypassL1forPrefetches)) {
     // bypass L1 cache
     unsigned control_size = 8;
     unsigned size = mf->get_access_size() + control_size;
@@ -5412,7 +5413,7 @@ void ldst_unit::cycle() {
                                       // on load miss only
 
         bool bypassL1D = false;
-        if (CACHE_GLOBAL == mf->get_inst().cache_op || (m_L1D == NULL)) {
+        if (CACHE_GLOBAL == mf->get_inst().cache_op || (m_L1D == NULL) || m_config->bypassL1forNonRTloads) {
           bypassL1D = true;
         } else if (mf->get_access_type() == GLOBAL_ACC_R ||
                    mf->get_access_type() ==
